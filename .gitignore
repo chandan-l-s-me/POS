@@ -1,0 +1,14 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Local SQLite database & generated backups — contain real customer data,
+# hashed passwords, and GSTINs. Never commit these.
+*.db
+*.db-journal
+/backups/

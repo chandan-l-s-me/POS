@@ -1,0 +1,5 @@
+{
+  "name": "Vyapar POS - Retail Billing System",
+  "description": "A fully offline-first retail POS billing system with barcode scanner support, GST compliant invoices, and analytics dashboard.",
+  "requestFramePermissions": []
+}
