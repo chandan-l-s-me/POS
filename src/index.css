@@ -1,232 +1,496 @@
 @import "tailwindcss";
 
+/* ===========================================================================
+   THEME TOKENS
+   ---------------------------------------------------------------------------
+   This app has no `dark:` classes. It colours itself two ways: standard
+   Tailwind utilities (bg-white, text-gray-600 …) and ~200 hardcoded arbitrary
+   values baked into the markup (bg-[#f9f7ff], text-[#1d285f] …). Both are
+   remapped here onto one semantic token set, so the entire UI re-themes from
+   the two blocks below and nothing has to change in the components.
+
+   The hardcoded values are why dark mode looked broken: no utility override
+   can reach `bg-[#fff8e9]`, so panels stayed cream and text stayed navy on a
+   dark page regardless of what the utility rules said.
+   =========================================================================== */
+
 :root {
-  --palette-indigo: #232d9b;
-  --palette-violet: #5534b7;
-  --palette-orchid: #b153d7;
-  --palette-pink: #e164b5;
-  --palette-ink: #1b1f46;
-  --surface-base: #f5f3ff;
-  --surface-soft: #ece7ff;
-  --surface-muted: #ddd4ff;
-  --text-strong: #1b1f46;
-  --text-soft: #625c8c;
-  --border-soft: rgba(85, 52, 183, 0.12);
-  --shadow-brand: rgba(35, 45, 155, 0.2);
+  color-scheme: light;
+
+  /* Page */
+  --page-top: #faf9ff;
+  --page-bottom: #f3f0ff;
+  --page-glow-a: rgba(177, 83, 215, 0.18);
+  --page-glow-b: rgba(225, 100, 181, 0.12);
+
+  /* Surfaces, in elevation order */
+  --surface-card: #ffffff;
+  --surface-base: #f9f7ff;
+  --surface-soft: #f4f2ff;
+  --surface-strong: #ece7ff;
+  --surface-hover: #efeaff;
+  --surface-input: #ffffff;
+  --surface-cream: #fffdf9;
+  --surface-danger: #fff5f5;
+
+  /* Text, strongest to faintest */
+  --text-strong: #1d285f;
+  --text-body: #24306c;
+  --text-soft: #5f68a1;
+  --text-muted: #7a73a6;
+  --text-faint: #9a94c9;
+  --text-placeholder: #9c93c6;
+
+  /* Accent + semantic */
+  --accent: #2733a6;
+  --accent-strong: #5534b7;
+  --accent-text: #5534b7;
+  --accent-on: #ffffff;
+  --accent-tint-weak: rgba(85, 52, 183, 0.07);
+  --accent-tint: rgba(85, 52, 183, 0.14);
+  --accent-tint-hover: rgba(85, 52, 183, 0.12);
+  --danger-text: #d16464;
+  --warn-text: #ef7a00;
+
+  /* Lines, rings, shadows */
+  --border-soft: #e5ddff;
+  --border-accent: #b89dff;
+  --border-danger: #f2d6d6;
+  --ring-accent: #d7c9ff;
+  --shadow-brand: rgba(35, 45, 155, 0.18);
+
+  /* Gradient stops */
+  --grad-banner-a: #fff8e9;
+  --grad-banner-b: #fffaf2;
+  --grad-banner-c: #fffdea;
+  --grad-brand-a: #232d9b;
+  --grad-brand-b: #5534b7;
+  --grad-brand-c: #b153d7;
+  --grad-brand-d: #e164b5;
+  --grad-pale-a: #f5f1ff;
+  --grad-pale-b: #fff1fa;
+  --grad-dark-a: #1b1f46;
+
+  --selection-bg: rgba(85, 52, 183, 0.2);
+  --scrollbar-thumb: rgba(85, 52, 183, 0.3);
 }
 
-html,
-body,
-#root {
-  min-height: 100%;
+/* ---------------------------------------------------------------------------
+   DARK
+   The previous dark theme was a single saturated navy (#1b1f46 page against a
+   #1d2452 card): only 1.05:1 apart, so cards dissolved into the background and
+   the whole screen read as one flat blue slab. This palette drops to a much
+   darker, near-neutral violet-tinted base, which buys real elevation steps and
+   lets the brand violet actually glow against it.
+   --------------------------------------------------------------------------- */
+html.dark {
+  color-scheme: dark;
+
+  --page-top: #12111c;
+  --page-bottom: #0d0c14;
+  --page-glow-a: rgba(140, 90, 230, 0.13);
+  --page-glow-b: rgba(214, 96, 178, 0.09);
+
+  --surface-card: #1a1826;
+  --surface-base: #161522;
+  --surface-soft: #232135;
+  --surface-strong: #2e2b45;
+  --surface-hover: #322f4c;
+  --surface-input: #201e2f;
+  /* Neutral violet, not a warm brown — the light value is a cream tint, but
+     carrying that warmth into dark mode just looks like a stain. */
+  --surface-cream: #1e1b2b;
+  --surface-danger: #2a1a1f;
+
+  --text-strong: #f4f2f9;
+  --text-body: #ded9ec;
+  --text-soft: #aaa3c2;
+  --text-muted: #948da9;
+  --text-faint: #7d7691;
+  --text-placeholder: #7a7390;
+
+  /* On a dark ground the accent must be LIGHTER than the surface. The old
+     #232d9b sat at 1.44:1 against the page — invisible. */
+  --accent: #6d4fe0;
+  --accent-strong: #7c5cf0;
+  --accent-text: #c4b5fd;
+  --accent-on: #ffffff;
+  --accent-tint-weak: rgba(140, 100, 240, 0.1);
+  --accent-tint: rgba(140, 100, 240, 0.18);
+  --accent-tint-hover: rgba(140, 100, 240, 0.26);
+  --danger-text: #ff8a8a;
+  --warn-text: #ffb057;
+
+  --border-soft: rgba(255, 255, 255, 0.09);
+  --border-accent: rgba(160, 130, 255, 0.36);
+  --border-danger: rgba(255, 130, 130, 0.3);
+  --ring-accent: rgba(150, 122, 255, 0.55);
+  /* A brand-tinted glow reads as depth on light; on dark only a true shadow
+     does, a coloured one just looks like haze. */
+  --shadow-brand: rgba(0, 0, 0, 0.6);
+
+  /* Cream banners become a deep violet panel rather than staying beige. */
+  --grad-banner-a: #241f33;
+  --grad-banner-b: #1e1a2b;
+  --grad-banner-c: #1a1726;
+  /* The brand ramp stays vivid — it carries white text and reads well on dark. */
+  --grad-brand-a: #4b3fd4;
+  --grad-brand-b: #7b47e0;
+  --grad-brand-c: #b153d7;
+  --grad-brand-d: #e164b5;
+  --grad-pale-a: #201d31;
+  --grad-pale-b: #2a1f30;
+  --grad-dark-a: #0d0c14;
+
+  --selection-bg: rgba(150, 122, 255, 0.32);
+  --scrollbar-thumb: rgba(160, 140, 255, 0.3);
 }
+
+/* ---------------------------------------------------------------- base --- */
+
+html, body, #root { min-height: 100%; }
 
 body {
   background:
-    radial-gradient(circle at top left, rgba(177, 83, 215, 0.18), transparent 28%),
-    radial-gradient(circle at top right, rgba(225, 100, 181, 0.12), transparent 24%),
-    linear-gradient(180deg, #faf9ff 0%, #f3f0ff 100%);
+    radial-gradient(circle at top left, var(--page-glow-a), transparent 28%),
+    radial-gradient(circle at top right, var(--page-glow-b), transparent 24%),
+    linear-gradient(180deg, var(--page-top) 0%, var(--page-bottom) 100%);
   color: var(--text-strong);
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-html.dark body {
+::selection { background: var(--selection-bg); }
+* { scrollbar-color: var(--scrollbar-thumb) transparent; }
+
+/* ------------------------------------------------------------ fullscreen --- */
+/* The browser paints a backdrop behind the fullscreen element, and its default
+   is opaque black. Without these the till flashes black on entering full
+   screen, and any area the body's gradient does not cover stays black. The
+   fullscreen element here is <html> (see src/hooks/useFullscreen.ts). */
+
+:root:fullscreen,
+:root:-webkit-full-screen {
   background:
-    radial-gradient(circle at top left, rgba(177, 83, 215, 0.18), transparent 24%),
-    radial-gradient(circle at top right, rgba(225, 100, 181, 0.14), transparent 20%),
-    linear-gradient(180deg, #171d5a 0%, #1b1f46 100%);
-  color: #f5f0ff;
+    radial-gradient(circle at top left, var(--page-glow-a), transparent 28%),
+    radial-gradient(circle at top right, var(--page-glow-b), transparent 24%),
+    linear-gradient(180deg, var(--page-top) 0%, var(--page-bottom) 100%);
+  /* The UA stylesheet forces the fullscreen element to fill the viewport;
+     without this the app's own scroll containers are clipped. */
+  overflow: auto;
 }
 
-.bg-white {
-  background-color: rgba(255, 255, 255, 0.88) !important;
+:root:fullscreen::backdrop,
+:root:-webkit-full-screen::backdrop {
+  background: var(--page-bottom);
 }
 
-.bg-gray-50 {
-  background-color: var(--surface-base) !important;
+/* ================================================= standard utilities === */
+
+.bg-white { background-color: var(--surface-card) !important; }
+.bg-gray-50 { background-color: var(--surface-base) !important; }
+.bg-gray-100 { background-color: var(--surface-soft) !important; }
+.bg-gray-200 { background-color: var(--surface-strong) !important; }
+
+.bg-orange-50, .bg-red-50, .bg-green-50, .bg-sky-50,
+.bg-amber-50, .bg-emerald-50, .bg-violet-50, .bg-purple-50 {
+  background-color: var(--accent-tint-weak) !important;
 }
 
-.bg-gray-100 {
-  background-color: var(--surface-soft) !important;
+.bg-orange-100, .bg-red-100, .bg-green-100, .bg-blue-100, .bg-purple-100,
+.bg-amber-100, .bg-emerald-100, .bg-sky-100, .bg-violet-100 {
+  background-color: var(--accent-tint) !important;
 }
 
-.bg-orange-50,
-.bg-red-50,
-.bg-green-50,
-.bg-sky-50 {
-  background-color: rgba(177, 83, 215, 0.08) !important;
+.bg-orange-600, .bg-green-600, .bg-green-500, .bg-sky-700,
+.bg-purple-600, .bg-violet-600, .bg-emerald-600 {
+  background-color: var(--accent) !important;
 }
 
-.bg-orange-100,
-.bg-red-100,
-.bg-green-100,
-.bg-blue-100,
-.bg-purple-100,
-.bg-amber-100,
-.bg-emerald-100,
-.bg-sky-100 {
-  background-color: rgba(177, 83, 215, 0.16) !important;
+.bg-orange-700, .bg-red-600, .bg-amber-700, .bg-violet-700, .bg-emerald-700 {
+  background-color: var(--accent-strong) !important;
 }
 
-.bg-orange-600,
-.bg-green-600,
-.bg-sky-700,
-.bg-purple-600 {
-  background-color: var(--palette-indigo) !important;
+.text-gray-900 { color: var(--text-strong) !important; }
+.text-gray-700 { color: var(--text-body) !important; }
+.text-gray-600, .text-gray-500 { color: var(--text-soft) !important; }
+.text-gray-400 { color: var(--text-muted) !important; }
+
+.text-orange-600, .text-orange-700, .text-green-500, .text-green-600,
+.text-sky-700, .text-amber-600, .text-amber-700, .text-blue-600,
+.text-purple-600, .text-violet-700, .text-emerald-700 {
+  color: var(--accent-text) !important;
 }
 
-.bg-orange-700,
-.bg-red-600,
-.bg-amber-700 {
-  background-color: var(--palette-violet) !important;
-}
+.text-red-400, .text-red-500, .text-red-600 { color: var(--danger-text) !important; }
 
-.text-orange-600,
-.text-orange-700,
-.text-red-500,
-.text-red-600,
-.text-green-600,
-.text-sky-700,
-.text-amber-700,
-.text-blue-600,
-.text-purple-600 {
-  color: var(--palette-indigo) !important;
-}
-
-.text-gray-900 {
-  color: var(--text-strong) !important;
-}
-
-.text-gray-700 {
-  color: #31386d !important;
-}
-
-.text-gray-600,
-.text-gray-500 {
-  color: var(--text-soft) !important;
-}
-
-.text-gray-400 {
-  color: #8b84b5 !important;
-}
-
-.border-gray-50,
-.border-gray-100,
-.border-gray-200 {
+.border-gray-50, .border-gray-100, .border-gray-200,
+.divide-gray-50 > :not([hidden]) ~ :not([hidden]),
+.divide-gray-100 > :not([hidden]) ~ :not([hidden]) {
   border-color: var(--border-soft) !important;
 }
 
-.border-orange-100,
-.border-orange-200,
-.border-orange-300,
-.border-red-100 {
-  border-color: rgba(85, 52, 183, 0.24) !important;
+.border-orange-100, .border-orange-200, .border-orange-300 {
+  border-color: var(--border-accent) !important;
 }
+.border-red-100 { border-color: var(--border-danger) !important; }
 
-.shadow-orange-100,
-.shadow-orange-200 {
+.focus\:ring-orange-500:focus, .focus\:ring-sky-500:focus {
+  --tw-ring-color: var(--ring-accent) !important;
+}
+.focus\:border-transparent:focus { border-color: transparent !important; }
+
+.shadow-orange-100, .shadow-orange-200, .shadow-violet-200,
+.shadow-emerald-200, .shadow-gray-200 {
   --tw-shadow-color: var(--shadow-brand) !important;
 }
 
-.hover\:bg-gray-50:hover,
-.hover\:bg-gray-100:hover {
-  background-color: #e7e1ff !important;
+.hover\:bg-gray-50:hover, .hover\:bg-gray-100:hover,
+.hover\:bg-gray-200:hover, .hover\:bg-white:hover {
+  background-color: var(--surface-hover) !important;
+}
+.hover\:bg-orange-50:hover, .hover\:bg-red-50:hover {
+  background-color: var(--accent-tint-hover) !important;
+}
+.hover\:bg-orange-700:hover, .hover\:bg-violet-700:hover, .hover\:bg-emerald-700:hover {
+  background-color: var(--accent-strong) !important;
+}
+.hover\:text-gray-900:hover { color: var(--text-strong) !important; }
+.hover\:text-gray-600:hover { color: var(--text-soft) !important; }
+.hover\:text-orange-600:hover { color: var(--accent-text) !important; }
+.hover\:text-red-500:hover { color: var(--danger-text) !important; }
+
+/* ============================ hardcoded arbitrary values in the markup === */
+.bg-\[\#2733a6\] {
+  background-color: var(--accent) !important;
 }
 
-.hover\:bg-orange-50:hover,
-.hover\:bg-red-50:hover {
-  background-color: rgba(177, 83, 215, 0.14) !important;
+.text-\[\#2433a3\],
+.text-\[\#5534b7\],
+.text-\[\#5a3fc0\] {
+  color: var(--accent-text) !important;
 }
 
-.hover\:bg-orange-700:hover {
-  background-color: var(--palette-violet) !important;
+.border-\[\#b89dff\],
+.border-\[\#c8baf9\],
+.border-\[\#ccb9ff\],
+.border-\[\#cdb9ff\],
+.border-\[\#d4c6ff\],
+.border-\[\#d9cbff\] {
+  border-color: var(--border-accent) !important;
 }
 
-.hover\:text-gray-900:hover {
-  color: var(--palette-ink) !important;
+.border-\[\#f0d2d2\],
+.border-\[\#f2d6d6\],
+.border-\[\#f3d6d6\] {
+  border-color: var(--border-danger) !important;
 }
 
-.hover\:text-orange-600:hover,
-.hover\:text-red-500:hover {
-  color: var(--palette-indigo) !important;
+.border-\[\#ddd3ff\],
+.border-\[\#e3d8ff\],
+.border-\[\#e4dbff\],
+.border-\[\#e5ddff\],
+.border-\[\#e6deff\],
+.border-\[\#e7defd\],
+.border-\[\#ebe4ff\],
+.border-\[\#efe8ff\],
+.divide-\[\#f0e9ff\] > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--border-soft) !important;
 }
 
-.focus\:ring-orange-500:focus,
-.focus\:ring-sky-500:focus {
-  --tw-ring-color: rgba(85, 52, 183, 0.35) !important;
+.text-\[\#d16464\] {
+  color: var(--danger-text) !important;
 }
 
-.focus\:border-transparent:focus {
-  border-color: transparent !important;
+.from-\[\#fff8e9\] {
+  --tw-gradient-from: var(--grad-banner-a) !important;
 }
 
-input,
-select,
-textarea {
+.via-\[\#fffaf2\] {
+  --tw-gradient-via: var(--grad-banner-b) !important;
+}
+
+.to-\[\#fffdea\] {
+  --tw-gradient-to: var(--grad-banner-c) !important;
+}
+
+.from-\[\#232d9b\] {
+  --tw-gradient-from: var(--grad-brand-a) !important;
+}
+
+.to-\[\#232d9b\] {
+  --tw-gradient-to: var(--grad-brand-a) !important;
+}
+
+.from-\[\#5534b7\] {
+  --tw-gradient-from: var(--grad-brand-b) !important;
+}
+
+.to-\[\#5534b7\] {
+  --tw-gradient-to: var(--grad-brand-b) !important;
+}
+
+.via-\[\#5534b7\] {
+  --tw-gradient-via: var(--grad-brand-b) !important;
+}
+
+.from-\[\#b153d7\] {
+  --tw-gradient-from: var(--grad-brand-c) !important;
+}
+
+.to-\[\#b153d7\] {
+  --tw-gradient-to: var(--grad-brand-c) !important;
+}
+
+.to-\[\#e164b5\] {
+  --tw-gradient-to: var(--grad-brand-d) !important;
+}
+
+.from-\[\#1b1f46\] {
+  --tw-gradient-from: var(--grad-dark-a) !important;
+}
+
+.from-\[\#f5f1ff\] {
+  --tw-gradient-from: var(--grad-pale-a) !important;
+}
+
+.to-\[\#fff1fa\] {
+  --tw-gradient-to: var(--grad-pale-b) !important;
+}
+
+.ring-\[\#d7c9ff\] {
+  --tw-ring-color: var(--ring-accent) !important;
+}
+
+.bg-\[\#f3f1ff\],
+.bg-\[\#f9f4ff\],
+.bg-\[\#f9f5ff\],
+.bg-\[\#f9f6ff\],
+.bg-\[\#f9f7ff\],
+.bg-\[\#faf7ff\],
+.bg-\[\#fbf9ff\] {
+  background-color: var(--surface-base) !important;
+}
+
+.bg-\[\#fffdf9\] {
+  background-color: var(--surface-cream) !important;
+}
+
+.bg-\[\#fff4f4\],
+.bg-\[\#fff5f5\] {
+  background-color: var(--surface-danger) !important;
+}
+
+.bg-\[\#f1edf8\],
+.bg-\[\#f4edff\],
+.bg-\[\#f4f2ff\],
+.bg-\[\#f5f0ff\],
+.bg-\[\#f6f1ff\],
+.bg-\[\#f7f3ff\],
+.bg-\[\#f8f2ff\],
+.bg-\[\#f8f5ff\] {
+  background-color: var(--surface-soft) !important;
+}
+
+.text-\[\#9a94c9\] {
+  color: var(--text-faint) !important;
+}
+
+.text-\[\#544c83\],
+.text-\[\#5b538d\],
+.text-\[\#655d93\],
+.text-\[\#7068a2\],
+.text-\[\#7168a4\],
+.text-\[\#7a73a6\],
+.text-\[\#7b73aa\],
+.text-\[\#7d75ac\],
+.text-\[\#8a80be\] {
+  color: var(--text-muted) !important;
+}
+
+.text-\[\#4d5688\],
+.text-\[\#56609a\],
+.text-\[\#5c6797\],
+.text-\[\#5f68a1\] {
+  color: var(--text-soft) !important;
+}
+
+.text-\[\#0f1d59\],
+.text-\[\#111c5a\],
+.text-\[\#1d285f\],
+.text-\[\#24306c\] {
+  color: var(--text-strong) !important;
+}
+
+.text-\[\#ef7a00\] {
+  color: var(--warn-text) !important;
+}
+
+/* ==================== opacity-modified + gradient-stop utilities ========= */
+/* `bg-white/95` is a DIFFERENT class from `bg-white`, so the rule above never
+   reached it — this is what left the Billing form sitting on a near-white
+   panel while its labels were correctly themed to near-white text. */
+
+.bg-white\/95,
+.bg-white\/90 {
+  background-color: var(--surface-card) !important;
+}
+
+.bg-orange-50\/30 {
+  background-color: var(--accent-tint-weak) !important;
+}
+
+/* Gradient stops set --tw-gradient-*, not background-color, so a
+   `background-color` override is silently ignored. This is why the Purchases
+   header stayed cream. */
+.from-orange-50 { --tw-gradient-from: var(--grad-banner-a) !important; }
+.to-amber-50    { --tw-gradient-to:   var(--grad-banner-c) !important; }
+
+/* Brand-tinted drop shadows read as depth on a light page but as blue haze on
+   a dark one; swap them for a true shadow. */
+html.dark .shadow-\[0_18px_40px_rgba\(35\,45\,155\,0\.08\)\],
+html.dark .shadow-\[0_20px_50px_rgba\(35\,45\,155\,0\.08\)\],
+html.dark .shadow-\[0_24px_60px_rgba\(35\,45\,155\,0\.24\)\],
+html.dark .shadow-\[0_18px_35px_rgba\(39\,51\,166\,0\.22\)\] {
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* ------------------------------------------------------------ controls --- */
+
+input, select, textarea {
   color: var(--text-strong);
-  caret-color: var(--palette-indigo);
+  background-color: var(--surface-input);
+  caret-color: var(--accent-text);
+}
+input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
+
+html.dark input[type="date"]::-webkit-calendar-picker-indicator,
+html.dark input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
+}
+html.dark select option {
+  background-color: var(--surface-input);
+  color: var(--text-strong);
 }
 
-input::placeholder,
-textarea::placeholder {
-  color: #9c93c6;
-}
+/* -------------------------------------------------------------- receipt --- */
+/* A receipt is a paper document and a print preview: black on white in both
+   themes. Without this the thermal layout (bg-white + text-black) renders
+   black text on a dark card. Scoped selectors outrank the rules above. */
 
-html.dark .bg-gray-50 {
-  background-color: #1a2153 !important;
-}
+.receipt-paper,
+.receipt-paper .bg-white { background-color: #ffffff !important; }
 
-html.dark .bg-white {
-  background-color: rgba(24, 31, 70, 0.92) !important;
-}
+.receipt-paper,
+.receipt-paper .text-gray-900,
+.receipt-paper .text-gray-700,
+.receipt-paper .text-gray-600,
+.receipt-paper .text-gray-500 { color: #000000 !important; }
 
-html.dark .bg-gray-100 {
-  background-color: #252c66 !important;
-}
+.receipt-paper .text-gray-400 { color: #555555 !important; }
 
-html.dark .border-gray-50,
-html.dark .border-gray-100,
-html.dark .border-gray-200 {
-  border-color: rgba(255, 255, 255, 0.1) !important;
-}
+.receipt-paper .border-gray-100,
+.receipt-paper .border-gray-200 { border-color: #000000 !important; }
 
-html.dark .text-gray-900 {
-  color: #faf7ff !important;
-}
-
-html.dark .text-gray-700 {
-  color: #e7ddff !important;
-}
-
-html.dark .text-gray-600,
-html.dark .text-gray-500 {
-  color: #c7b8ef !important;
-}
-
-html.dark .text-gray-400 {
-  color: #9288bd !important;
-}
-
-html.dark .hover\:bg-gray-100:hover {
-  background-color: #313a7b !important;
-}
-
-html.dark .hover\:bg-gray-50:hover {
-  background-color: #252c66 !important;
-}
-
-html.dark .hover\:text-gray-900:hover {
-  color: #fff4f6 !important;
-}
-
-html.dark input,
-html.dark select,
-html.dark textarea {
-  color: #faf7ff;
-  background-color: #252c66;
-}
-
-html.dark input::placeholder,
-html.dark textarea::placeholder {
-  color: #8f88b9;
+@media print {
+  .receipt-paper { background-color: #ffffff !important; color: #000000 !important; }
 }

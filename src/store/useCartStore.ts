@@ -67,9 +67,17 @@ const createEmptyCart = (index: number): BillingCart => ({
 });
 
 const recalculateCart = (cart: BillingCart): BillingCart => {
-  const subtotal = round2(cart.items.reduce((acc, item) => acc + item.price * item.quantity, 0));
+  // Sum the per-line taxable values that `buildLine` derived by subtraction,
+  // NOT (rounded unit base x quantity). Rounding the unit base and then
+  // multiplying lets the client's subtotal drift a paisa per line away from
+  // the server's, and once the drift crosses a rupee boundary the floored
+  // grand total on screen differs from the one written to the ledger — the
+  // cashier collects one amount and the books record another.
+  const subtotal = round2(cart.items.reduce((acc, item) => acc + item.taxable_amount, 0));
   const tax = round2(cart.items.reduce((acc, item) => acc + item.sgst_amount + item.cgst_amount + item.igst_amount, 0));
-  const total = round2(subtotal + tax - cart.discount);
+  // Mirrors server.ts: the payable is floored to whole rupees, so the amount
+  // on screen is exactly what the bill will record and the customer will pay.
+  const total = Math.floor(round2(subtotal + tax - cart.discount));
 
   const paymentAmounts =
     cart.paymentMethod === 'split'
@@ -123,6 +131,37 @@ export const useCartStore = create<CartState>((set, get) => {
       cgstUnit,
       igstUnit: 0,
       basePriceUnit: totalUnit - sgstUnit - cgstUnit,
+    };
+  };
+
+  /**
+   * Build a cart line. This mirrors the recomputation in server.ts field for
+   * field, including the order of the roundings, so the till and the ledger
+   * cannot disagree. Change one and you must change the other.
+   */
+  const buildLine = (item: Item, totalUnit: number, quantity: number) => {
+    const { sgstUnit, cgstUnit, igstUnit } = getTaxBreakdown(item, totalUnit);
+
+    const sgst_amount = round2(sgstUnit * quantity);
+    const cgst_amount = round2(cgstUnit * quantity);
+    const igst_amount = round2(igstUnit * quantity);
+    const total_amount = round2(totalUnit * quantity);
+    // Derive the taxable value by subtracting the already-rounded taxes from
+    // the already-rounded line total, so that for every line
+    //     taxable + tax === total
+    // holds exactly and the invoice reconciles.
+    const taxable_amount = round2(total_amount - sgst_amount - cgst_amount - igst_amount);
+
+    return {
+      quantity,
+      sgst_amount,
+      cgst_amount,
+      igst_amount,
+      total_amount,
+      taxable_amount,
+      // Unit rate consistent with the line taxable value above; this is the
+      // figure the server stores in bill_items.price.
+      price: quantity > 0 ? round2(taxable_amount / quantity) : 0,
     };
   };
 
@@ -185,25 +224,13 @@ export const useCartStore = create<CartState>((set, get) => {
             const updatedItems = cart.items.map((cartItem) => {
               if (cartItem.id !== item.id) return cartItem;
               const nextQuantity = cartItem.quantity + quantity;
-              const totalUnit = cartItem.original_price;
-              const { sgstUnit, cgstUnit, igstUnit, basePriceUnit } = getTaxBreakdown(cartItem, totalUnit);
-
-              return {
-                ...cartItem,
-                quantity: nextQuantity,
-                sgst_amount: round2(sgstUnit * nextQuantity),
-                cgst_amount: round2(cgstUnit * nextQuantity),
-                igst_amount: round2(igstUnit * nextQuantity),
-                total_amount: round2(totalUnit * nextQuantity),
-                price: round2(basePriceUnit),
-              };
+              return { ...cartItem, ...buildLine(cartItem, cartItem.original_price, nextQuantity) };
             });
 
             return { ...cart, items: updatedItems };
           }
 
           const totalUnit = item.price;
-          const { sgstUnit, cgstUnit, igstUnit, basePriceUnit } = getTaxBreakdown(item, totalUnit);
 
           return {
             ...cart,
@@ -211,12 +238,7 @@ export const useCartStore = create<CartState>((set, get) => {
               ...cart.items,
               {
                 ...item,
-                quantity,
-                sgst_amount: round2(sgstUnit * quantity),
-                cgst_amount: round2(cgstUnit * quantity),
-                igst_amount: round2(igstUnit * quantity),
-                total_amount: round2(totalUnit * quantity),
-                price: round2(basePriceUnit),
+                ...buildLine(item, totalUnit, quantity),
                 original_price: totalUnit,
               },
             ],
@@ -236,21 +258,9 @@ export const useCartStore = create<CartState>((set, get) => {
       set((state) => ({
         carts: updateActiveCart(state.carts, state.activeCartId, (cart) => ({
           ...cart,
-          items: cart.items.map((item) => {
-            if (item.id !== itemId) return item;
-            const totalUnit = item.original_price;
-            const { sgstUnit, cgstUnit, igstUnit, basePriceUnit } = getTaxBreakdown(item, totalUnit);
-
-            return {
-              ...item,
-              quantity,
-              sgst_amount: round2(sgstUnit * quantity),
-              cgst_amount: round2(cgstUnit * quantity),
-              igst_amount: round2(igstUnit * quantity),
-              total_amount: round2(totalUnit * quantity),
-              price: round2(basePriceUnit),
-            };
-          }),
+          items: cart.items.map((item) =>
+            item.id === itemId ? { ...item, ...buildLine(item, item.original_price, quantity) } : item
+          ),
         })),
       })),
 

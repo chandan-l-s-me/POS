@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api';
-import { useDataStore } from '../store/useDataStore';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -29,62 +28,96 @@ import {
   Legend
 } from 'recharts';
 import { cn, formatISTDateKeyLabel } from '../lib/utils';
+import { useThemeStore } from '../store/useThemeStore';
 
 export const Dashboard = () => {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const items = useDataStore((state) => state.items);
+  const mode = useThemeStore((state) => state.mode);
+
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getAnalytics()
       .then(setData)
+      // Without a catch the failure surfaced only as an unhandled rejection in
+      // the console, and the page said "Failed to load analytics." with no
+      // indication of why.
+      .catch((err: any) => setError(err?.message || 'Could not load analytics.'))
       .finally(() => setLoading(false));
   }, []);
 
   if (loading) return <div className="p-8 text-center text-gray-400">Loading analytics...</div>;
-  if (!data) return <div className="p-8 text-center text-red-400">Failed to load analytics.</div>;
+  if (!data) {
+    return (
+      <div className="p-8 text-center text-red-400">
+        {error || 'Failed to load analytics.'}
+      </div>
+    );
+  }
 
-  const COLORS = ['#232d9b', '#5534b7', '#b153d7', '#e164b5', '#f0a4dc'];
-  const lowStockItems = items
-    .filter((item) => item.stock_quantity < 10)
-    .sort((a, b) => a.stock_quantity - b.stock_quantity);
+  // Recharts paints via SVG fill attributes, so these can't be reached by the
+  // CSS theme layer. The light ramp starts at a deep indigo that all but
+  // disappears on a dark page, so swap in a lifted ramp for dark mode.
+  const isDark = mode === 'dark';
+  const COLORS = isDark
+    ? ['#7c5cf0', '#9b6ef0', '#c07ae8', '#e77fc4', '#f5aede']
+    : ['#232d9b', '#5534b7', '#b153d7', '#e164b5', '#f0a4dc'];
+  // Grid lines and series strokes are SVG attributes, so the CSS theme layer
+  // can't reach them. The light values are a pale lilac grid and a deep indigo
+  // line, both of which vanish on a dark card.
+  const gridStroke = isDark ? 'rgba(255,255,255,0.10)' : '#e6def8';
+  const lineStroke = isDark ? '#9b7cf5' : '#232d9b';
+  const barFill = isDark ? '#7c5cf0' : '#5534b7';
+  // Straight from the server, which scans the whole items table. Filtering the
+  // client-side cache here meant the alert only ever covered the slice of the
+  // catalogue that happened to be loaded.
+  const lowStockItems: Array<{ id: number; name: string; hsn_code?: string; metric: string; stock_quantity: number }> =
+    data.lowStock || [];
+
+  // Every tile below shows a figure that came from the database.
+  //
+  // Three of these used to carry hardcoded trend badges — "+12.5%", "+8.2%",
+  // "-2.4%" — that never changed and were not computed from anything. On a
+  // dashboard a shopkeeper uses to decide what to stock, an invented trend is
+  // worse than no trend. "Total Orders" was likewise not a count of orders: it
+  // tallied how many of the last 30 days had any revenue, so a shop billing
+  // three hundred times a day read "30".
+  const formatMoney = (value: number) =>
+    `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   const stats = [
-    { 
-      label: "Today's Revenue", 
-      value: `₹${data.todayRevenue.toFixed(2)}`, 
-      icon: DollarSign, 
+    {
+      label: "Today's Revenue",
+      value: formatMoney(data.todayRevenue),
+      icon: DollarSign,
       color: "from-[#232d9b] to-[#5534b7]",
       iconColor: "text-white",
-      trend: "+12.5%",
-      trendUp: true
+      note: `${Number(data.todayBillCount || 0).toLocaleString('en-IN')} bills`,
     },
-    { 
-      label: "Monthly Revenue", 
-      value: `₹${data.monthRevenue.toFixed(2)}`, 
-      icon: TrendingUp, 
+    {
+      label: "Monthly Revenue",
+      value: formatMoney(data.monthRevenue),
+      icon: TrendingUp,
       color: "from-[#5534b7] to-[#b153d7]",
       iconColor: "text-white",
-      trend: "+8.2%",
-      trendUp: true
+      note: 'This month',
     },
-    { 
-      label: "Top Selling Item", 
-      value: data.topItems[0]?.name || 'N/A', 
-      icon: Package, 
+    {
+      label: "Top Selling Item",
+      value: data.topItems[0]?.name || 'N/A',
+      icon: Package,
       color: "from-[#1b1f46] to-[#232d9b]",
       iconColor: "text-white",
-      trend: "Hot",
-      trendUp: true
+      note: data.topItems[0] ? `${Number(data.topItems[0].total_qty).toLocaleString('en-IN')} sold (90d)` : 'No sales yet',
     },
-    { 
-      label: "Total Orders", 
-      value: data.salesByDay.reduce((acc: any, d: any) => acc + (d.revenue > 0 ? 1 : 0), 0), 
-      icon: ShoppingCart, 
+    {
+      label: "Bills This Month",
+      value: Number(data.monthBillCount || 0).toLocaleString('en-IN'),
+      icon: ShoppingCart,
       color: "from-[#b153d7] to-[#e164b5]",
       iconColor: "text-white",
-      trend: "-2.4%",
-      trendUp: false
+      note: `${Number(data.todayBillCount || 0).toLocaleString('en-IN')} today`,
     },
   ];
 
@@ -103,7 +136,7 @@ export const Dashboard = () => {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur-sm">
               <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">Revenue Today</p>
-              <p className="mt-1 text-xl font-black">₹{data.todayRevenue.toFixed(0)}</p>
+              <p className="mt-1 text-xl font-black">{formatMoney(data.todayRevenue)}</p>
             </div>
             <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur-sm">
               <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">Best Seller</p>
@@ -131,12 +164,8 @@ export const Dashboard = () => {
               <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center bg-gradient-to-br shadow-lg", stat.color, stat.iconColor)}>
                 <stat.icon size={24} />
               </div>
-              <div className={cn(
-                "flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-full",
-                stat.trendUp ? "bg-purple-100 text-purple-600" : "bg-red-50 text-red-600"
-              )}>
-                {stat.trendUp ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                {stat.trend}
+              <div className="text-xs font-bold px-2 py-1 rounded-full bg-purple-100 text-purple-600">
+                {stat.note}
               </div>
             </div>
             <div>
@@ -167,7 +196,7 @@ export const Dashboard = () => {
                     <stop offset="95%" stopColor="#e164b5" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e6def8" />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridStroke} />
                 <XAxis 
                   dataKey="date" 
                   axisLine={false} 
@@ -192,7 +221,7 @@ export const Dashboard = () => {
                 <Area 
                   type="monotone" 
                   dataKey="revenue" 
-                  stroke="#232d9b" 
+                  stroke={lineStroke} 
                   strokeWidth={3}
                   fillOpacity={1} 
                   fill="url(#colorRevenue)" 
@@ -248,7 +277,7 @@ export const Dashboard = () => {
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={data.topItems} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e6def8" />
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={gridStroke} />
                 <XAxis type="number" hide />
                 <YAxis 
                   dataKey="name" 
@@ -267,7 +296,7 @@ export const Dashboard = () => {
                     boxShadow: '0 18px 40px rgba(35,45,155,0.12)' 
                   }}
                 />
-                <Bar dataKey="total_qty" fill="#5534b7" radius={[0, 10, 10, 0]} barSize={30} />
+                <Bar dataKey="total_qty" fill={barFill} radius={[0, 10, 10, 0]} barSize={30} />
               </BarChart>
             </ResponsiveContainer>
           </div>

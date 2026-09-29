@@ -7,6 +7,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import db, { initDb } from './db/index';
+import { readPool } from './db/asyncRead';
 
 dotenv.config();
 
@@ -269,6 +270,29 @@ setInterval(() => {
   }
 }, LOGIN_WINDOW_MS).unref();
 
+/**
+ * Audit log retention.
+ *
+ * The table grows at roughly one row per bill and was never pruned, so at a
+ * few lakh transactions a week it becomes the largest table in the database
+ * and every Logs query pages through it forever. Keep a bounded window; GST
+ * records live in `bills`/`bill_items`, not here.
+ */
+const AUDIT_LOG_RETENTION_DAYS = Number(process.env.AUDIT_LOG_RETENTION_DAYS) || 400;
+
+const pruneAuditLogs = () => {
+  try {
+    const result = db.prepare(
+      `DELETE FROM audit_logs WHERE created_at < datetime('now', ?)`
+    ).run(`-${AUDIT_LOG_RETENTION_DAYS} days`);
+    if (result.changes > 0) {
+      console.log(`[maintenance] pruned ${result.changes} audit log row(s) older than ${AUDIT_LOG_RETENTION_DAYS} days`);
+    }
+  } catch (err: any) {
+    console.error('[maintenance] audit log prune failed:', err.message);
+  }
+};
+
 // Initialize DB
 initDb();
 
@@ -308,6 +332,10 @@ const seedInitialAdmin = () => {
 };
 seedInitialAdmin();
 
+pruneAuditLogs();
+// Sweep daily so a long-running till doesn't accumulate a year of rows.
+setInterval(pruneAuditLogs, 24 * 60 * 60 * 1000).unref();
+
 const writeAuditLog = (params: {
   user: { id: number; name: string; role: string };
   action: string;
@@ -327,6 +355,58 @@ const writeAuditLog = (params: {
     params.entityId == null ? null : String(params.entityId),
     params.details
   );
+};
+
+/**
+ * Move a customer's credit balance and record why, as one atomic step.
+ *
+ * Every path that changes what a customer owes goes through here — a credit
+ * sale, an opening balance, a repayment, an admin correction — so the ledger
+ * can never drift from `customers.credit_balance`. Changing the balance with a
+ * bare UPDATE somewhere else would silently reintroduce exactly the gap this
+ * table exists to close.
+ *
+ * `delta` is signed: positive means the customer owes more.
+ * MUST be called inside a db.transaction().
+ */
+const recordCreditChange = (params: {
+  customerId: number;
+  delta: number;
+  entryType: 'opening' | 'sale' | 'payment' | 'adjustment';
+  note?: string | null;
+  billId?: number | null;
+  user: { id: number; name: string };
+}) => {
+  const row = db.prepare('SELECT credit_balance FROM customers WHERE id = ?').get(params.customerId) as any;
+  if (!row) throw new ValidationError('Customer not found');
+
+  const before = round2(row.credit_balance || 0);
+  const after = round2(before + params.delta);
+  // A negative outstanding balance would mean the shop owes the customer,
+  // which this app has no concept of; every caller bounds its input, so
+  // reaching here is a bug rather than bad user input.
+  if (after < 0) {
+    throw new ValidationError('That change would take the customer’s balance below zero.');
+  }
+
+  db.prepare('UPDATE customers SET credit_balance = ? WHERE id = ?').run(after, params.customerId);
+  db.prepare(`
+    INSERT INTO customer_credit_entries
+      (customer_id, bill_id, entry_type, amount, balance_before, balance_after, note, user_id, user_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    params.customerId,
+    params.billId ?? null,
+    params.entryType,
+    round2(params.delta),
+    before,
+    after,
+    params.note ?? null,
+    params.user.id,
+    params.user.name
+  );
+
+  return { before, after };
 };
 
 const upsertSupplier = (params: {
@@ -435,50 +515,37 @@ const getISTDateParts = () => {
   };
 };
 
-const buildBackupPayload = () => {
-  const tables = db.prepare(`
-    SELECT name
-    FROM sqlite_master
-    WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-    ORDER BY name ASC
-  `).all() as { name: string }[];
-
-  const backupData = Object.fromEntries(
-    tables.map(({ name }) => {
-      // The backup is a plaintext JSON file on disk. Exporting `users` as-is
-      // put every bcrypt password hash into it, so anyone who copies a backup
-      // (USB stick, cloud sync, email to an accountant) can crack credentials
-      // offline at their leisure. Export the account metadata, never the hash.
-      if (name === 'users') {
-        return [name, db.prepare('SELECT id, username, role, name, is_active FROM users').all()];
-      }
-      return [name, db.prepare(`SELECT * FROM ${name}`).all()];
-    })
-  );
-
-  return {
-    app: 'VyaparaBilling',
-    generated_at: new Date().toISOString(),
-    backup_type: 'full',
-    tables: backupData,
-  };
-};
-
+/**
+ * Snapshot the database to a file.
+ *
+ * This used to build a JSON document by running `SELECT *` over every table
+ * into JavaScript arrays and then `JSON.stringify`-ing the result. At 1.27M
+ * bills that allocated ~4 GB of heap and killed the process outright:
+ *
+ *   POST /api/backups/local -> 22.7s -> FATAL ERROR: heap out of memory
+ *
+ * An admin pressing "Backup" took the whole shop offline. SQLite's VACUUM INTO
+ * writes a fully-formed, transactionally-consistent copy of the database
+ * straight to disk. It streams inside SQLite, so JS heap use is constant
+ * regardless of table size, and the output is a real .db file that can be
+ * opened or restored directly rather than a JSON blob nothing can read back.
+ */
 const createLocalBackup = () => {
-  const backupPayload = buildBackupPayload();
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const fileName = `vyaparabilling-backup-${timestamp}.json`;
+  const fileName = `vyaparabilling-backup-${timestamp}.db`;
   const backupDirectory = path.join(process.cwd(), 'backups');
   fs.mkdirSync(backupDirectory, { recursive: true, mode: 0o700 });
   const filePath = path.join(backupDirectory, fileName);
+
+  // VACUUM INTO refuses to overwrite, so a stale partial file must go first.
+  fs.rmSync(filePath, { force: true });
+  db.exec(`VACUUM INTO '${filePath.replace(/'/g, "''")}'`);
+
   // 0600: backups hold every customer's name, phone, address, GSTIN and
   // outstanding balance. Only the account running the server should read them.
-  fs.writeFileSync(filePath, JSON.stringify(backupPayload, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  fs.chmodSync(filePath, 0o600);
 
-  return {
-    fileName,
-    filePath,
-  };
+  return { fileName, filePath, sizeBytes: fs.statSync(filePath).size };
 };
 
 // Middleware for auth
@@ -696,7 +763,18 @@ app.put('/api/admin/account', authenticateToken, requireAdmin, route((req, res) 
   // Enforce the password policy on the new password, not just on creation.
   const newPassword = hasNewPassword ? validatePassword(req.body.new_password, 'New password') : null;
 
-  if (trimmedUsername && trimmedUsername !== adminUser.username) {
+  // Work out what genuinely changes. The username field is pre-filled with the
+  // current username, so a password-only save still submits it — treating that
+  // as a "change" made every no-op save bump token_version below, which killed
+  // the caller's session and reported success while changing nothing.
+  const usernameChanged = Boolean(trimmedUsername) && trimmedUsername !== adminUser.username;
+
+  if (!usernameChanged && !newPassword) {
+    res.status(400).json({ error: 'Enter a new username or a new password to update.' });
+    return;
+  }
+
+  if (usernameChanged) {
     const existingUser = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(trimmedUsername, req.user.id) as any;
     if (existingUser) {
       res.status(400).json({ error: 'Username already exists' });
@@ -704,7 +782,7 @@ app.put('/api/admin/account', authenticateToken, requireAdmin, route((req, res) 
     }
   }
 
-  const nextUsername = trimmedUsername || adminUser.username;
+  const nextUsername = usernameChanged ? trimmedUsername : adminUser.username;
   const nextPassword = newPassword ? bcrypt.hashSync(newPassword, BCRYPT_ROUNDS) : adminUser.password;
 
   // Bump token_version so every token issued under the old credentials stops
@@ -727,7 +805,11 @@ app.put('/api/admin/account', authenticateToken, requireAdmin, route((req, res) 
     action: 'update',
     entityType: 'admin_account',
     entityId: req.user.id,
-    details: `Updated admin account credentials${nextUsername !== adminUser.username ? `, username changed to ${nextUsername}` : ''}`,
+    details:
+      'Updated admin account: ' +
+      [newPassword ? 'password changed' : null, usernameChanged ? `username changed to ${nextUsername}` : null]
+        .filter(Boolean)
+        .join(', '),
   });
 
   // Hand back a fresh token so the admin isn't logged out by their own change.
@@ -860,24 +942,51 @@ app.put('/api/cashiers/:id', authenticateToken, requireAdmin, route((req, res) =
 }));
 
 // --- Audit Log Routes ---
-app.get('/api/audit-logs', authenticateToken, requireAdmin, route((req, res) => {
+app.get('/api/audit-logs', authenticateToken, requireAdmin, route(async (req, res) => {
   const { limit, offset } = readPaging(req);
-  const logs = db.prepare(`
-    SELECT *
-    FROM audit_logs
-    ORDER BY created_at DESC, id DESC
-    LIMIT ? OFFSET ?
-  `).all(limit, offset);
-  const { total } = db.prepare('SELECT COUNT(*) as total FROM audit_logs').get() as any;
+  const search = optString(req.query.search, 'search', 100);
 
-  res.json({ data: logs, total, limit, offset });
+  const where = search
+    ? 'WHERE user_name LIKE ? OR action LIKE ? OR entity_type LIKE ? OR details LIKE ?'
+    : '';
+  const params = search ? [`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`] : [];
+
+  const [logs, countRow] = await Promise.all([
+    readPool.all(`
+      SELECT * FROM audit_logs ${where}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?
+    `, [...params, limit, offset]),
+    readPool.get(`SELECT COUNT(*) as total FROM audit_logs ${where}`, params),
+  ]);
+
+  res.json({ data: logs, total: countRow?.total ?? 0, limit, offset });
 }));
 
 // --- Item Routes ---
-app.get('/api/items', authenticateToken, (req, res) => {
-  const items = db.prepare('SELECT * FROM items ORDER BY name ASC').all();
-  res.json(items);
-});
+// Columns the billing/scanning screens actually need. `SELECT *` also shipped
+// image_url (an arbitrary-length URL), barcode and created_at to every client
+// on every page load — dead weight in the payload and, for image_url,
+// unbounded. The Items admin screen asks for the full row via ?withImages=1.
+const ITEM_LIST_COLUMNS =
+  'id, name, hsn_code, price, metric, is_loose, gst_applicable, gst_mode, gst_rate, sgst_rate, cgst_rate, igst_rate, stock_quantity';
+
+app.get('/api/items', authenticateToken, route((req, res) => {
+  const { limit, offset } = readPaging(req);
+  const search = optString(req.query.search, 'search', 100);
+  const withImages = req.query.withImages === '1';
+  const columns = withImages ? '*' : ITEM_LIST_COLUMNS;
+
+  const where = search ? 'WHERE name LIKE ? OR hsn_code LIKE ?' : '';
+  const params = search ? [`%${search}%`, `%${search}%`] : [];
+
+  const items = db.prepare(`
+    SELECT ${columns} FROM items ${where} ORDER BY name ASC LIMIT ? OFFSET ?
+  `).all(...params, limit, offset);
+  const { total } = db.prepare(`SELECT COUNT(*) as total FROM items ${where}`).get(...params) as any;
+
+  res.json({ data: items, total, limit, offset });
+}));
 
 /**
  * Shared validation for item writes. Money and tax rates are bounded: a
@@ -980,18 +1089,79 @@ app.delete('/api/items/:id', authenticateToken, requireAdmin, route((req, res) =
 }));
 
 // --- Customer Routes ---
-app.get('/api/customers', authenticateToken, (req, res) => {
-  const customers = db.prepare('SELECT * FROM customers ORDER BY name ASC').all();
-  res.json(customers);
+
+/**
+ * A customer's display name, in SQL: their bakery/shop name, falling back to
+ * their own name for a customer who has no shop.
+ *
+ * This shop refers to customers by bakery, so that is what lists sort by and
+ * what the audit log records. It is the same rule as customerDisplayName() in
+ * src/lib/customer.ts — change one and you must change the other.
+ */
+const CUSTOMER_DISPLAY_SQL = (alias = '') => {
+  const col = (name: string) => (alias ? `${alias}.${name}` : name);
+  return `COALESCE(NULLIF(TRIM(${col('shop_name')}), ''), ${col('name')})`;
+};
+
+/** The JS side of CUSTOMER_DISPLAY_SQL, for audit messages. */
+const customerDisplayName = (customer: { name?: string | null; shop_name?: string | null }) =>
+  (customer.shop_name ?? '').trim() || (customer.name ?? '').trim();
+
+app.get('/api/customers', authenticateToken, route((req, res) => {
+  const { limit, offset } = readPaging(req);
+  const search = optString(req.query.search, 'search', 100);
+
+  const where = search ? 'WHERE shop_name LIKE ? OR name LIKE ? OR phone LIKE ?' : '';
+  const params = search ? [`%${search}%`, `%${search}%`, `%${search}%`] : [];
+
+  // Alphabetical by bakery, so the list reads the way the shop talks. Sorting
+  // by the person's name scattered a bakery's entry wherever its owner's first
+  // name happened to fall.
+  const customers = db.prepare(`
+    SELECT * FROM customers ${where}
+    ORDER BY lower(${CUSTOMER_DISPLAY_SQL()}) ASC, id ASC
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset);
+  const { total } = db.prepare(`SELECT COUNT(*) as total FROM customers ${where}`).get(...params) as any;
+
+  res.json({ data: customers, total, limit, offset });
+}));
+
+// Cheap counts for the sidebar badges, so the shell doesn't need the full
+// item and customer lists in memory just to render two numbers.
+app.get('/api/stats', authenticateToken, (_req, res) => {
+  res.json({
+    items: (db.prepare('SELECT COUNT(*) c FROM items').get() as any).c,
+    customers: (db.prepare('SELECT COUNT(*) c FROM customers').get() as any).c,
+  });
 });
 
-const readCustomerPayload = (body: any) => ({
-  name: reqString(body?.name, 'Customer name', 200),
-  phone: reqString(body?.phone, 'Customer phone', 20),
-  shop_name: optString(body?.shop_name, 'Shop name', 200),
-  address: optString(body?.address, 'Address', 500),
-  gstin: optString(body?.gstin, 'GSTIN', 20),
-});
+/**
+ * A customer needs a bakery/shop name, or — for someone with no shop — their
+ * own name. At least one; either on its own is enough.
+ *
+ * This used to require the person's name and treat the shop as optional,
+ * which is backwards for a shop that knows its customers by bakery: a cashier
+ * who only knew "Sri Ganesh Bakery" could not create the customer without
+ * inventing a person to put in the required field.
+ */
+const readCustomerPayload = (body: any) => {
+  const shop_name = optString(body?.shop_name, 'Bakery / shop name', 200);
+  const name = optString(body?.name, 'Customer name', 200);
+  if (!shop_name && !name) {
+    fail('Enter the bakery / shop name, or the customer’s name if they have no shop');
+  }
+  return {
+    // The column is NOT NULL, so a shop-only customer stores an empty
+    // person's name rather than NULL. Every reader goes through the display
+    // rule, which skips blanks.
+    name: name ?? '',
+    phone: reqString(body?.phone, 'Customer phone', 20),
+    shop_name,
+    address: optString(body?.address, 'Address', 500),
+    gstin: optString(body?.gstin, 'GSTIN', 20),
+  };
+};
 
 app.post('/api/customers', authenticateToken, route((req, res) => {
   const customer = readCustomerPayload(req.body);
@@ -1012,17 +1182,35 @@ app.post('/api/customers', authenticateToken, route((req, res) => {
     return;
   }
 
-  const result = db.prepare(`
-    INSERT INTO customers (name, phone, shop_name, address, gstin, credit_balance)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(customer.name, customer.phone, customer.shop_name, customer.address, customer.gstin, credit_balance);
+  // The row is inserted with a zero balance and then moved through
+  // recordCreditChange, so an opening balance appears on the customer's
+  // statement instead of materialising out of nowhere.
+  const create = db.transaction(() => {
+    const inserted = db.prepare(`
+      INSERT INTO customers (name, phone, shop_name, address, gstin, credit_balance)
+      VALUES (?, ?, ?, ?, ?, 0)
+    `).run(customer.name, customer.phone, customer.shop_name, customer.address, customer.gstin);
+
+    const customerId = Number(inserted.lastInsertRowid);
+    if (credit_balance > 0) {
+      recordCreditChange({
+        customerId,
+        delta: credit_balance,
+        entryType: 'opening',
+        note: 'Opening balance set when the customer was created',
+        user: req.user,
+      });
+    }
+    return inserted;
+  });
+  const result = create();
 
   writeAuditLog({
     user: req.user,
     action: 'create',
     entityType: 'customer',
     entityId: Number(result.lastInsertRowid),
-    details: `Created customer ${customer.name}`,
+    details: `Created customer ${customerDisplayName(customer)}`,
   });
   res.json({ id: Number(result.lastInsertRowid) });
 }));
@@ -1049,25 +1237,298 @@ app.put('/api/customers/:id', authenticateToken, route((req, res) => {
       ? num(req.body.credit_balance, 'Credit balance', { min: 0, max: 100_000_000 })
       : existingCustomer.credit_balance;
 
-  db.prepare(`
-    UPDATE customers
-    SET name = ?, phone = ?, shop_name = ?, address = ?, gstin = ?, credit_balance = ?
-    WHERE id = ?
-  `).run(customer.name, customer.phone, customer.shop_name, customer.address, customer.gstin, nextCreditBalance, id);
-
   const balanceChanged = nextCreditBalance !== existingCustomer.credit_balance;
+  const adjustmentNote = optString(req.body?.credit_note, 'Credit note', 300);
+
+  // Contact details and the balance move together, so a failure cannot leave
+  // the balance changed with no ledger entry explaining it.
+  const update = db.transaction(() => {
+    db.prepare(`
+      UPDATE customers
+      SET name = ?, phone = ?, shop_name = ?, address = ?, gstin = ?
+      WHERE id = ?
+    `).run(customer.name, customer.phone, customer.shop_name, customer.address, customer.gstin, id);
+
+    if (balanceChanged) {
+      recordCreditChange({
+        customerId: id,
+        delta: round2(nextCreditBalance - existingCustomer.credit_balance),
+        entryType: 'adjustment',
+        note: adjustmentNote || 'Balance corrected by an admin',
+        user: req.user,
+      });
+    }
+  });
+  update();
   writeAuditLog({
     user: req.user,
     action: 'update',
     entityType: 'customer',
     entityId: id,
     details:
-      `Updated customer ${existingCustomer.name} to ${customer.name}` +
+      `Updated customer ${customerDisplayName(existingCustomer)} to ${customerDisplayName(customer)}` +
       // Balance adjustments are the entry most worth being able to trace later.
       (balanceChanged ? `; credit balance ${existingCustomer.credit_balance} -> ${nextCreditBalance}` : ''),
   });
 
   res.json({ success: true });
+}));
+
+/**
+ * Record a repayment against a customer's outstanding credit.
+ *
+ * Before this existed, the only way to record "the customer paid ₹500" was for
+ * an admin to retype the balance, which left no record of the amount, the
+ * date, or that it was a payment at all. A shop extending credit needs to be
+ * able to show a customer their statement.
+ */
+app.post('/api/customers/:id/credit-payments', authenticateToken, route((req, res) => {
+  const id = rowId(req.params.id);
+  const amount = num(req.body?.amount, 'Payment amount', { min: 0.01, max: 100_000_000 });
+  const note = optString(req.body?.note, 'Note', 300);
+
+  const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(id) as any;
+  if (!customer) {
+    res.status(404).json({ error: 'Customer not found' });
+    return;
+  }
+
+  const outstanding = round2(customer.credit_balance || 0);
+  if (outstanding <= 0) {
+    res.status(400).json({ error: 'This customer has no outstanding credit.' });
+    return;
+  }
+  // Taking more than is owed would leave a negative balance, which the app
+  // has no way to represent or settle. Say so rather than silently capping.
+  if (round2(amount) > outstanding) {
+    res.status(400).json({
+      error: `Payment of ₹${round2(amount).toFixed(2)} is more than the ₹${outstanding.toFixed(2)} outstanding.`,
+    });
+    return;
+  }
+
+  const settle = db.transaction(() =>
+    recordCreditChange({
+      customerId: id,
+      delta: -round2(amount),
+      entryType: 'payment',
+      note: note || 'Credit repayment received',
+      user: req.user,
+    })
+  );
+  const { before, after } = settle();
+
+  writeAuditLog({
+    user: req.user,
+    action: 'credit_payment',
+    entityType: 'customer',
+    entityId: id,
+    details: `Received ₹${round2(amount).toFixed(2)} from ${customerDisplayName(customer)}; balance ${before.toFixed(2)} -> ${after.toFixed(2)}`,
+  });
+
+  res.status(201).json({ customer_id: id, amount: round2(amount), balance_before: before, balance_after: after });
+}));
+
+/** A customer's credit statement: when the balance moved, by how much, and why. */
+app.get('/api/customers/:id/credit-entries', authenticateToken, route((req, res) => {
+  const id = rowId(req.params.id);
+  const { limit, offset } = readPaging(req);
+
+  const customer = db.prepare('SELECT id, name, shop_name, credit_balance FROM customers WHERE id = ?').get(id) as any;
+  if (!customer) {
+    res.status(404).json({ error: 'Customer not found' });
+    return;
+  }
+
+  const entries = db.prepare(`
+    SELECT e.*, b.bill_number
+    FROM customer_credit_entries e
+    LEFT JOIN bills b ON b.id = e.bill_id
+    WHERE e.customer_id = ?
+    ORDER BY e.created_at DESC, e.id DESC
+    LIMIT ? OFFSET ?
+  `).all(id, limit, offset);
+  const { total } = db.prepare(
+    'SELECT COUNT(*) as total FROM customer_credit_entries WHERE customer_id = ?'
+  ).get(id) as any;
+
+  res.json({
+    data: entries,
+    total,
+    limit,
+    offset,
+    customer: {
+      id: customer.id,
+      name: customer.name,
+      shop_name: customer.shop_name,
+      credit_balance: customer.credit_balance,
+    },
+  });
+}));
+
+/**
+ * A customer's passbook: every transaction with them, in one timeline.
+ *
+ * The credit statement above shows only what moved the outstanding balance,
+ * so a bakery that pays cash for most orders looked almost inactive there.
+ * A passbook shows everything — every bill however it was paid, every
+ * repayment, every correction — with what was billed, what was received, and
+ * the balance due after each one.
+ *
+ * Each row carries three figures:
+ *   amount_billed    what the customer was charged (a bill's total)
+ *   amount_received  what they paid (cash + UPI at the counter, or a repayment)
+ *   balance_change   billed - received, i.e. what went onto their account
+ *
+ * A bill appears once, as itself. Its 'sale' ledger entry is deliberately left
+ * out — it is the credit portion of that same bill, and including both would
+ * count it twice. Every other ledger entry (payment, adjustment, opening) is a
+ * row of its own. Summing balance_change over the whole history therefore
+ * lands exactly on customers.credit_balance, and the tests hold it there.
+ *
+ * The running balance is computed over the customer's entire history *before*
+ * the date filter is applied, so a period that starts mid-way opens with the
+ * balance that was actually owed on that day, not zero.
+ */
+const PASSBOOK_EVENTS_SQL = `
+  WITH events AS (
+    SELECT
+      'bill'             AS kind,
+      b.id               AS ref_id,
+      b.created_at       AS created_at,
+      0                  AS kind_order,
+      b.bill_number      AS bill_number,
+      b.payment_method   AS payment_method,
+      b.cash_amount      AS cash_amount,
+      b.upi_amount       AS upi_amount,
+      b.credit_amount    AS credit_amount,
+      b.subtotal_amount  AS subtotal_amount,
+      b.tax_amount       AS tax_amount,
+      b.discount_amount  AS discount_amount,
+      (SELECT COUNT(*) FROM bill_items bi WHERE bi.bill_id = b.id) AS item_count,
+      b.total_amount     AS amount_billed,
+      ROUND(b.cash_amount + b.upi_amount, 2) AS amount_received,
+      b.credit_amount    AS balance_change,
+      NULL               AS note,
+      COALESCE(u.name, 'Unknown') AS user_name
+    FROM bills b
+    LEFT JOIN users u ON u.id = b.user_id
+    WHERE b.customer_id = ?
+
+    UNION ALL
+
+    SELECT
+      e.entry_type,
+      e.id,
+      e.created_at,
+      -- Within the same second: an opening balance comes before anything
+      -- else, and a repayment or correction after the bill it follows.
+      CASE e.entry_type WHEN 'opening' THEN -1 ELSE 1 END,
+      NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+      CASE WHEN e.amount > 0 THEN e.amount ELSE 0 END,
+      CASE WHEN e.amount < 0 THEN -e.amount ELSE 0 END,
+      e.amount,
+      e.note,
+      e.user_name
+    FROM customer_credit_entries e
+    WHERE e.customer_id = ? AND e.entry_type != 'sale'
+  ),
+  running AS (
+    SELECT
+      events.*,
+      date(datetime(created_at, '+5 hours', '+30 minutes')) AS ist_date,
+      ROUND(SUM(balance_change) OVER (
+        ORDER BY created_at, kind_order, ref_id
+        ROWS UNBOUNDED PRECEDING
+      ), 2) AS balance
+    FROM events
+  )`;
+
+app.get('/api/customers/:id/passbook', authenticateToken, route(async (req, res) => {
+  const id = rowId(req.params.id);
+  const { limit, offset } = readPaging(req);
+  const from = optDate(req.query.from, 'from');
+  const to = optDate(req.query.to, 'to');
+  if (from && to && from > to) fail('from must be on or before to');
+  const order = req.query.order === undefined ? 'desc' : oneOf(req.query.order, ['asc', 'desc'] as const, 'order');
+
+  const customer = db.prepare(
+    'SELECT id, name, shop_name, phone, address, gstin, credit_balance, created_at FROM customers WHERE id = ?'
+  ).get(id) as any;
+  if (!customer) {
+    res.status(404).json({ error: 'Customer not found' });
+    return;
+  }
+
+  const where: string[] = [];
+  const rangeParams: string[] = [];
+  if (from) { where.push('ist_date >= ?'); rangeParams.push(from); }
+  if (to) { where.push('ist_date <= ?'); rangeParams.push(to); }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  const direction = order === 'asc' ? 'ASC' : 'DESC';
+  const orderSql = `ORDER BY created_at ${direction}, kind_order ${direction}, ref_id ${direction}`;
+
+  const [rows, summary, openingRow] = await Promise.all([
+    readPool.all(
+      `${PASSBOOK_EVENTS_SQL} SELECT * FROM running ${whereSql} ${orderSql} LIMIT ? OFFSET ?`,
+      [id, id, ...rangeParams, limit, offset]
+    ),
+    readPool.get(
+      `${PASSBOOK_EVENTS_SQL}
+       SELECT
+         COUNT(*) AS total,
+         COALESCE(SUM(CASE WHEN kind = 'bill' THEN 1 ELSE 0 END), 0) AS bill_count,
+         ROUND(COALESCE(SUM(amount_billed), 0), 2) AS total_billed,
+         ROUND(COALESCE(SUM(amount_received), 0), 2) AS total_received
+       FROM running ${whereSql}`,
+      [id, id, ...rangeParams]
+    ),
+    // What was owed going into the period: the running balance of the last
+    // transaction before it starts. Without a start date there is nothing
+    // before, so the period opens at zero.
+    from
+      ? readPool.get(
+          `${PASSBOOK_EVENTS_SQL}
+           SELECT balance FROM running WHERE ist_date < ?
+           ORDER BY created_at DESC, kind_order DESC, ref_id DESC LIMIT 1`,
+          [id, id, from]
+        )
+      : Promise.resolve(null),
+  ]);
+
+  const openingBalance = round2(openingRow?.balance ?? 0);
+  const totalBilled = round2(summary?.total_billed ?? 0);
+  const totalReceived = round2(summary?.total_received ?? 0);
+
+  res.json({
+    customer: {
+      id: customer.id,
+      name: customer.name,
+      shop_name: customer.shop_name,
+      phone: customer.phone,
+      address: customer.address,
+      gstin: customer.gstin,
+      credit_balance: customer.credit_balance,
+      created_at: customer.created_at,
+    },
+    summary: {
+      opening_balance: openingBalance,
+      total_billed: totalBilled,
+      total_received: totalReceived,
+      // Opening + billed - received, which by construction equals the running
+      // balance after the period's last transaction.
+      closing_balance: round2(openingBalance + totalBilled - totalReceived),
+      bill_count: summary?.bill_count ?? 0,
+    },
+    data: rows,
+    total: summary?.total ?? 0,
+    limit,
+    offset,
+    from,
+    to,
+    order,
+  });
 }));
 
 // --- Supplier Routes ---
@@ -1229,20 +1690,31 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
       }
 
       const totalUnit = dbItem.price;
-      const { sgstUnit, cgstUnit, igstUnit, basePriceUnit } = computeUnitTaxBreakdown(dbItem, totalUnit);
+      const { sgstUnit, cgstUnit, igstUnit } = computeUnitTaxBreakdown(dbItem, totalUnit);
 
       const lineSgst = round2(sgstUnit * quantity);
       const lineCgst = round2(cgstUnit * quantity);
       const lineIgst = round2(igstUnit * quantity);
       const lineTotal = round2(totalUnit * quantity);
 
-      subtotal_amount += round2(basePriceUnit * quantity);
+      // Derive the taxable value by SUBTRACTING the already-rounded taxes from
+      // the already-rounded line total, rather than rounding
+      // (base-price-per-unit x qty) independently. Rounding the two figures
+      // separately let them disagree by a paisa, so on the invoice the line
+      // amounts did not add up to the printed Subtotal, and Subtotal + Tax did
+      // not equal the Grand Total. This keeps the identity
+      //     line taxable + line tax === line total
+      // exactly true for every row, so the invoice always reconciles.
+      const lineTaxable = round2(lineTotal - lineSgst - lineCgst - lineIgst);
+
+      subtotal_amount += lineTaxable;
       tax_amount += lineSgst + lineCgst + lineIgst;
 
       lineItems.push({
         item_id: dbItem.id,
         quantity,
-        price: round2(basePriceUnit),
+        // Unit rate consistent with the line taxable value above.
+        price: quantity > 0 ? round2(lineTaxable / quantity) : 0,
         sgst_amount: lineSgst,
         cgst_amount: lineCgst,
         igst_amount: lineIgst,
@@ -1256,7 +1728,13 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
     if (safeDiscount > subtotal_amount + tax_amount) {
       throw new ValidationError('Discount cannot exceed the bill subtotal');
     }
-    const total_amount = round2(subtotal_amount + tax_amount - safeDiscount);
+    // The shop settles in whole rupees and rounds DOWN, so the payable is
+    // floored and the dropped paise become the invoice's Round Off line.
+    // Storing the floored figure (rather than the exact one) keeps printed,
+    // recorded and collected amounts identical — otherwise the cash drawer
+    // never reconciles against the ledger.
+    const grossTotal = round2(subtotal_amount + tax_amount - safeDiscount);
+    const total_amount = Math.floor(grossTotal);
 
     // --- Reconcile the payment split against the authoritative total ---
     //
@@ -1294,12 +1772,12 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
 
     const billResult = db.prepare(`
       INSERT INTO bills (
-        bill_number, customer_id, user_id, total_amount, tax_amount, 
+        bill_number, customer_id, user_id, subtotal_amount, total_amount, tax_amount,
         discount_amount, payment_method, cash_amount, upi_amount, credit_amount
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      bill_number, customer_id, req.user.id, total_amount, tax_amount,
+      bill_number, customer_id, req.user.id, subtotal_amount, total_amount, tax_amount,
       safeDiscount, payment_method, cash_amount, upi_amount, credit_amount
     );
 
@@ -1325,16 +1803,24 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
       }
     }
 
-    // Update customer credit balance if credit_amount > 0
+    // Update customer credit balance if credit_amount > 0, and leave a ledger
+    // entry so the customer's statement shows which sale it came from.
     if (customer_id && credit_amount > 0) {
-      db.prepare('UPDATE customers SET credit_balance = credit_balance + ? WHERE id = ?')
-        .run(credit_amount, customer_id);
+      recordCreditChange({
+        customerId: customer_id,
+        delta: credit_amount,
+        entryType: 'sale',
+        billId: bill_id,
+        note: `Credit sale on bill ${bill_number}`,
+        user: req.user,
+      });
     }
 
-    return { bill_id, bill_number, total_amount };
+    return { bill_id, bill_number, subtotal_amount, tax_amount, total_amount };
   });
 
   const result = transaction();
+  analyticsCache = null; // a new sale invalidates the dashboard figures
   writeAuditLog({
     user: req.user,
     action: 'create',
@@ -1345,46 +1831,55 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
   res.json(result);
 }));
 
-app.get('/api/bills', authenticateToken, route((req, res) => {
+app.get('/api/bills', authenticateToken, route(async (req, res) => {
   const { limit, offset } = readPaging(req);
   const from = optDate(req.query.from, 'from');
   const to = optDate(req.query.to, 'to');
+  const search = optString(req.query.search, 'search', 100);
 
   // Returning every bill ever rung up was fine with a handful of test rows and
-  // ruinous at a few lakh a week — hundreds of MB serialised into one response
-  // on every page load. Page and date-filter instead.
+  // ruinous at a few lakh a week. Page, date-filter and search in SQL.
+  //
+  // Search matters as much as paging: without it the only way to reach an old
+  // bill is to page down to it, and at 1M rows OFFSET is O(n) — page 1000 took
+  // 400ms because SQLite walks every skipped row.
+  const IST_B = "date(datetime(b.created_at, '+5 hours', '+30 minutes'))";
   const where: string[] = [];
   const params: any[] = [];
-  if (from) {
-    where.push("date(datetime(b.created_at, '+5 hours', '+30 minutes')) >= ?");
-    params.push(from);
-  }
-  if (to) {
-    where.push("date(datetime(b.created_at, '+5 hours', '+30 minutes')) <= ?");
-    params.push(to);
+  if (from) { where.push(`${IST_B} >= ?`); params.push(from); }
+  if (to) { where.push(`${IST_B} <= ?`); params.push(to); }
+  if (search) {
+    // Shop name first: a cashier looking for last week's bill types the
+    // bakery, not the owner's name.
+    where.push('(b.bill_number LIKE ? OR c.shop_name LIKE ? OR c.name LIKE ? OR c.phone LIKE ?)');
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  const bills = db.prepare(`
-    SELECT b.*, c.name as customer_name, u.name as cashier_name
-    FROM bills b
-    LEFT JOIN customers c ON b.customer_id = c.id
-    JOIN users u ON b.user_id = u.id
-    ${whereSql}
-    ORDER BY b.created_at DESC, b.id DESC
-    LIMIT ? OFFSET ?
-  `).all(...params, limit, offset);
+  const [json, countRow] = await Promise.all([
+    readPool.json(`
+      SELECT b.*, c.name as customer_name, c.shop_name as customer_shop_name, u.name as cashier_name
+      FROM bills b
+      LEFT JOIN customers c ON b.customer_id = c.id
+      JOIN users u ON b.user_id = u.id
+      ${whereSql}
+      ORDER BY b.created_at DESC, b.id DESC
+      LIMIT ? OFFSET ?
+    `, [...params, limit, offset], { limit, offset }),
+    readPool.get(`
+      SELECT COUNT(*) as total FROM bills b
+      LEFT JOIN customers c ON b.customer_id = c.id
+      ${whereSql}
+    `, params),
+  ]);
 
-  const { total } = db.prepare(`
-    SELECT COUNT(*) as total FROM bills b ${whereSql}
-  `).get(...params) as any;
-
-  res.json({ data: bills, total, limit, offset });
+  // Splice the count into the worker-built JSON without re-parsing the rows.
+  res.type('application/json').send(json.replace(/\}$/, `,"total":${countRow?.total ?? 0}}`));
 }));
 
 app.get('/api/bills/:id', authenticateToken, route((req, res) => {
   const bill = db.prepare(`
-    SELECT b.*, c.name as customer_name, c.phone as customer_phone, c.address as customer_address, c.gstin as customer_gstin, u.name as cashier_name
+    SELECT b.*, c.name as customer_name, c.shop_name as customer_shop_name, c.phone as customer_phone, c.address as customer_address, c.gstin as customer_gstin, u.name as cashier_name
     FROM bills b
     LEFT JOIN customers c ON b.customer_id = c.id
     JOIN users u ON b.user_id = u.id
@@ -1564,14 +2059,29 @@ app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => 
 
 app.get('/api/purchases', authenticateToken, requireAdmin, route((req, res) => {
   const { limit, offset } = readPaging(req);
+  // Date filtering, so the Reports screen can bound purchases the same way it
+  // bounds sales. Without it that page pulled the most recent 1000 purchases
+  // and filtered them in the browser, so selecting an older range on a shop
+  // with more than 1000 purchases showed no purchases at all.
+  const from = optDate(req.query.from, 'from');
+  const to = optDate(req.query.to, 'to');
+
+  const IST_P = "date(datetime(p.created_at, '+5 hours', '+30 minutes'))";
+  const where: string[] = [];
+  const params: any[] = [];
+  if (from) { where.push(`${IST_P} >= ?`); params.push(from); }
+  if (to) { where.push(`${IST_P} <= ?`); params.push(to); }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
   const purchases = db.prepare(`
     SELECT p.*, u.name as user_name
     FROM purchases p
     JOIN users u ON p.user_id = u.id
+    ${whereSql}
     ORDER BY p.created_at DESC, p.id DESC
     LIMIT ? OFFSET ?
-  `).all(limit, offset);
-  const { total } = db.prepare('SELECT COUNT(*) as total FROM purchases').get() as any;
+  `).all(...params, limit, offset);
+  const { total } = db.prepare(`SELECT COUNT(*) as total FROM purchases p ${whereSql}`).get(...params) as any;
 
   res.json({ data: purchases, total, limit, offset });
 }));
@@ -1603,7 +2113,11 @@ app.get('/api/purchases/:id', authenticateToken, requireAdmin, route((req, res) 
 // Reports previously returned every line item ever recorded. Bound them to a
 // date window (defaulting to the current month) with an explicit row cap, so a
 // single report request can't exhaust memory once the shop has years of data.
-const MAX_REPORT_ROWS = 50_000;
+// A single response of 50k rows took 866ms to build and megabytes to ship.
+// Reports now page like every other list; the cap is the ceiling, not the
+// default.
+const MAX_REPORT_ROWS = 5_000;
+const DEFAULT_REPORT_ROWS = 500;
 
 const readReportRange = (req: express.Request) => {
   const { today, startOfMonth } = getISTDateParts();
@@ -1611,16 +2125,17 @@ const readReportRange = (req: express.Request) => {
     from: optDate(req.query.from, 'from') || startOfMonth,
     to: optDate(req.query.to, 'to') || today,
     limit: Math.min(
-      num(req.query.limit, 'limit', { min: 1, max: MAX_REPORT_ROWS, fallback: MAX_REPORT_ROWS }),
+      num(req.query.limit, 'limit', { min: 1, max: MAX_REPORT_ROWS, fallback: DEFAULT_REPORT_ROWS }),
       MAX_REPORT_ROWS
     ),
+    offset: num(req.query.offset, 'offset', { min: 0, max: Number.MAX_SAFE_INTEGER, fallback: 0 }),
   };
 };
 
-app.get('/api/reports/purchase-items', authenticateToken, requireAdmin, route((req, res) => {
-  const { from, to, limit } = readReportRange(req);
+app.get('/api/reports/purchase-items', authenticateToken, requireAdmin, route(async (req, res) => {
+  const { from, to, limit, offset } = readReportRange(req);
 
-  const rows = db.prepare(`
+  const json = await readPool.json(`
     SELECT
       p.id as purchase_id,
       p.purchase_number,
@@ -1649,22 +2164,23 @@ app.get('/api/reports/purchase-items', authenticateToken, requireAdmin, route((r
     JOIN users u ON p.user_id = u.id
     WHERE date(datetime(p.created_at, '+5 hours', '+30 minutes')) BETWEEN ? AND ?
     ORDER BY p.created_at DESC, p.id DESC, pi.id ASC
-    LIMIT ?
-  `).all(from, to, limit);
+    LIMIT ? OFFSET ?
+  `, [from, to, limit, offset], { from, to, limit, offset });
 
-  res.json({ data: rows, from, to, truncated: rows.length === limit });
+  res.type('application/json').send(json);
 }));
 
-app.get('/api/reports/sales-items', authenticateToken, requireAdmin, route((req, res) => {
-  const { from, to, limit } = readReportRange(req);
+app.get('/api/reports/sales-items', authenticateToken, requireAdmin, route(async (req, res) => {
+  const { from, to, limit, offset } = readReportRange(req);
 
-  const rows = db.prepare(`
+  const json = await readPool.json(`
     SELECT
       b.id as bill_id,
       b.bill_number,
       b.payment_method,
       b.created_at,
       c.name as customer_name,
+      c.shop_name as customer_shop_name,
       c.phone as customer_phone,
       u.name as cashier_name,
       bi.item_id,
@@ -1684,62 +2200,104 @@ app.get('/api/reports/sales-items', authenticateToken, requireAdmin, route((req,
     LEFT JOIN customers c ON b.customer_id = c.id
     WHERE date(datetime(b.created_at, '+5 hours', '+30 minutes')) BETWEEN ? AND ?
     ORDER BY b.created_at DESC, b.id DESC, bi.id ASC
-    LIMIT ?
-  `).all(from, to, limit);
+    LIMIT ? OFFSET ?
+  `, [from, to, limit, offset], { from, to, limit, offset });
 
-  res.json({ data: rows, from, to, truncated: rows.length === limit });
+  res.type('application/json').send(json);
 }));
 
 // --- Analytics Routes ---
-app.get('/api/analytics', authenticateToken, requireAdmin, (req, res) => {
+/**
+ * Dashboard figures are aggregates over the whole day/month — they do not need
+ * to be accurate to the second, and the admin landing page is often reloaded.
+ * A short TTL turns repeat visits into an instant hit instead of re-running
+ * five aggregate queries.
+ */
+const ANALYTICS_TTL_MS = 60_000;
+let analyticsCache: { at: number; payload: unknown } | null = null;
+
+// Stock at or below this counts as "low" on the dashboard.
+const LOW_STOCK_THRESHOLD = Number(process.env.LOW_STOCK_THRESHOLD) || 10;
+// The panel is a prompt to reorder, not a full stock report.
+const LOW_STOCK_LIMIT = 50;
+
+app.get('/api/analytics', authenticateToken, requireAdmin, route(async (_req, res) => {
+  if (analyticsCache && Date.now() - analyticsCache.at < ANALYTICS_TTL_MS) {
+    res.json(analyticsCache.payload);
+    return;
+  }
+
   const { today, startOfMonth } = getISTDateParts();
+  const IST = "datetime(created_at, '+5 hours', '+30 minutes')";
+  const IST_B = "datetime(b.created_at, '+5 hours', '+30 minutes')";
 
-  const todayRevenue = db.prepare(`
-    SELECT SUM(total_amount) as total
-    FROM bills
-    WHERE date(datetime(created_at, '+5 hours', '+30 minutes')) = ?
-  `).get(today) as any;
-  const monthRevenue = db.prepare(`
-    SELECT SUM(total_amount) as total
-    FROM bills
-    WHERE date(datetime(created_at, '+5 hours', '+30 minutes')) >= ?
-  `).get(startOfMonth) as any;
-  // Scoped to the last 12 months: an all-time GROUP BY over bill_items scans
-  // every row the shop has ever written, on every dashboard load.
-  const topItems = db.prepare(`
-    SELECT i.name, SUM(bi.quantity) as total_qty
-    FROM bill_items bi
-    JOIN bills b ON bi.bill_id = b.id
-    JOIN items i ON bi.item_id = i.id
-    WHERE date(datetime(b.created_at, '+5 hours', '+30 minutes')) >= date(?, '-365 days')
-    GROUP BY bi.item_id
-    ORDER BY total_qty DESC
-    LIMIT 5
-  `).all(today);
+  // All five run on the read workers. Previously they ran inline and the
+  // dashboard froze every till for ~6 seconds.
+  const [todayRevenue, monthRevenue, topItems, salesByDay, paymentMethods, lowStock] = await Promise.all([
+    // COUNT alongside SUM: the dashboard's order tile used to infer a count by
+    // tallying how many of the last 30 days had any revenue, which is a count
+    // of trading days, not of bills.
+    readPool.get(`SELECT SUM(total_amount) as total, COUNT(*) as bills FROM bills WHERE date(${IST}) = ?`, [today]),
+    readPool.get(`SELECT SUM(total_amount) as total, COUNT(*) as bills FROM bills WHERE date(${IST}) >= ?`, [startOfMonth]),
+    // Drive from bills (indexed on the IST date) and join down into
+    // bill_items, instead of scanning all 5.2M line items and looking up each
+    // parent bill to test its date. Also narrowed 365 -> 90 days: a "top
+    // sellers" panel is about current demand, and the extra 9 months cost far
+    // more than they inform.
+    // CROSS JOIN is SQLite's documented "do not reorder" hint. Left to itself
+    // the planner scans all of bill_items and looks up each parent bill to
+    // test its date; forcing it to start from the date-indexed bills table and
+    // fan out was 8x faster on a 1.27M-bill database (20.0s -> 2.5s).
+    readPool.all(
+      `SELECT i.name, SUM(bi.quantity) as total_qty
+       FROM bills b
+       CROSS JOIN bill_items bi ON bi.bill_id = b.id
+       CROSS JOIN items i ON i.id = bi.item_id
+       WHERE date(${IST_B}) >= date(?, '-90 days')
+       GROUP BY bi.item_id
+       ORDER BY total_qty DESC
+       LIMIT 5`,
+      [today]
+    ),
+    readPool.all(
+      `SELECT date(${IST}) as date, SUM(total_amount) as revenue
+       FROM bills WHERE date(${IST}) >= date(?, '-30 days')
+       GROUP BY date(${IST}) ORDER BY date ASC`,
+      [today]
+    ),
+    readPool.all(
+      `SELECT payment_method, COUNT(*) as count, SUM(total_amount) as total
+       FROM bills WHERE date(${IST}) >= ? GROUP BY payment_method`,
+      [startOfMonth]
+    ),
+    // Computed here rather than in the browser. The dashboard used to filter
+    // the client-side item cache, which holds at most the first 1000 items by
+    // name — so a shop with a larger catalogue was never told about low stock
+    // on anything past "H", and the page showed "All items are in stock".
+    readPool.all(
+      `SELECT id, name, hsn_code, metric, stock_quantity
+       FROM items
+       WHERE stock_quantity <= ?
+       ORDER BY stock_quantity ASC, name ASC
+       LIMIT ?`,
+      [LOW_STOCK_THRESHOLD, LOW_STOCK_LIMIT]
+    ),
+  ]);
 
-  const salesByDay = db.prepare(`
-    SELECT date(datetime(created_at, '+5 hours', '+30 minutes')) as date, SUM(total_amount) as revenue
-    FROM bills
-    WHERE date(datetime(created_at, '+5 hours', '+30 minutes')) >= date(?, '-30 days')
-    GROUP BY date(datetime(created_at, '+5 hours', '+30 minutes'))
-    ORDER BY date ASC
-  `).all(today);
-
-  const paymentMethods = db.prepare(`
-    SELECT payment_method, COUNT(*) as count, SUM(total_amount) as total
-    FROM bills
-    WHERE date(datetime(created_at, '+5 hours', '+30 minutes')) >= ?
-    GROUP BY payment_method
-  `).all(startOfMonth);
-
-  res.json({
+  const payload = {
     todayRevenue: todayRevenue?.total || 0,
+    todayBillCount: todayRevenue?.bills || 0,
     monthRevenue: monthRevenue?.total || 0,
+    monthBillCount: monthRevenue?.bills || 0,
     topItems: topItems || [],
     salesByDay: salesByDay || [],
-    paymentMethods: paymentMethods || []
-  });
-});
+    paymentMethods: paymentMethods || [],
+    lowStock: lowStock || [],
+    lowStockThreshold: LOW_STOCK_THRESHOLD,
+  };
+  analyticsCache = { at: Date.now(), payload };
+  res.json(payload);
+}));
 
 // Unknown API paths must not fall through to the SPA handler and return HTML
 // to a client expecting JSON.
@@ -1799,6 +2357,7 @@ async function startServer() {
     console.log(`\n[${signal}] Shutting down...`);
     server.close(() => {
       try {
+        readPool.close();
         db.pragma('wal_checkpoint(TRUNCATE)');
         db.close();
       } catch (err) {

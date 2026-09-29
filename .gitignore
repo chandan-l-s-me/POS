@@ -11,4 +11,9 @@ coverage/
 # hashed passwords, and GSTINs. Never commit these.
 *.db
 *.db-journal
+# WAL mode (enabled in db/index.ts) writes these alongside the database;
+# the -wal file holds recently committed transactions, so it leaks the same
+# customer data the .db does.
+*.db-wal
+*.db-shm
 /backups/

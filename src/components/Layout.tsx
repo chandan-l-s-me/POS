@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   ShoppingCart, 
@@ -15,11 +15,14 @@ import {
   Menu, 
   X,
   Sun,
-  Moon
+  Moon,
+  Maximize,
+  Minimize
 } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
 import { useDataStore } from '../store/useDataStore';
 import { useThemeStore } from '../store/useThemeStore';
+import { useFullscreen } from '../hooks/useFullscreen';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 
@@ -29,10 +32,52 @@ interface LayoutProps {
 
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { user, logout } = useAuthStore();
-  const { items, customers } = useDataStore();
+  const stats = useDataStore((state) => state.stats);
   const { mode, toggleMode } = useThemeStore();
   const navigate = useNavigate();
+  // `window.location.pathname` is read during render and does not subscribe to
+  // anything, so the header title below kept showing the previous page's name
+  // until some unrelated state change forced a re-render.
+  const location = useLocation();
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
+  // The status badge used to be a hardcoded green dot reading "Offline Mode
+  // Active" — it said the same thing whether or not the browser could reach
+  // anything, which is worse than no indicator on a till that must not keep
+  // taking orders it cannot record.
+  const [isOnline, setIsOnline] = React.useState(() =>
+    typeof navigator === 'undefined' ? true : navigator.onLine
+  );
+
+  React.useEffect(() => {
+    const online = () => setIsOnline(true);
+    const offline = () => setIsOnline(false);
+    window.addEventListener('online', online);
+    window.addEventListener('offline', offline);
+    return () => {
+      window.removeEventListener('online', online);
+      window.removeEventListener('offline', offline);
+    };
+  }, []);
+
+  // Restore the cashier's choice after a reload, on their next click or key.
+  const { isSupported: canFullscreen, isFullscreen, toggle: toggleFullscreen } =
+    useFullscreen({ restoreOnNextGesture: true });
+
+  // F11 is the browser's own fullscreen and works regardless; this is a
+  // shortcut that also survives kiosk setups where F11 is captured, and it
+  // keeps the button's state in step. A modifier is required so it cannot fire
+  // from a barcode scanner or from ordinary typing.
+  React.useEffect(() => {
+    if (!canFullscreen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
+        e.preventDefault();
+        void toggleFullscreen();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [canFullscreen, toggleFullscreen]);
 
   const handleLogout = () => {
     logout();
@@ -124,8 +169,8 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <p className="text-sm font-semibold truncate">{user?.name || 'User'}</p>
                 <p className="text-xs text-gray-500 capitalize">{user?.role || 'Role'}</p>
                 <div className="flex gap-2 mt-1">
-                  <span className="text-[10px] bg-gray-100 px-1 rounded text-gray-400">Items: {items.length}</span>
-                  <span className="text-[10px] bg-gray-100 px-1 rounded text-gray-400">Cust: {customers.length}</span>
+                  <span className="text-[10px] bg-gray-100 px-1 rounded text-gray-400">Items: {stats.items}</span>
+                  <span className="text-[10px] bg-gray-100 px-1 rounded text-gray-400">Cust: {stats.customers}</span>
                 </div>
               </div>
             )}
@@ -148,20 +193,42 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
         <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-8 shadow-sm shrink-0">
           <div className="flex items-center gap-4">
             <h2 className="text-lg font-semibold text-gray-700">
-              {navItems.find(item => item.to === window.location.pathname)?.label || 'POS'}
+              {/* Exact match first; then a section's nested pages, so a
+                  customer's passbook at /customers/12 is titled Customers. */}
+              {(navItems.find(item => item.to === location.pathname) ??
+                navItems.find(item => item.to !== '/' && location.pathname.startsWith(`${item.to}/`)))?.label || 'POS'}
             </h2>
           </div>
           <div className="flex items-center gap-4">
+            {canFullscreen && (
+              <button
+                onClick={() => void toggleFullscreen()}
+                className="p-2.5 rounded-xl bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-900 transition-all"
+                aria-label={isFullscreen ? 'Leave full screen' : 'Enter full screen'}
+                aria-pressed={isFullscreen}
+                title={
+                  isFullscreen
+                    ? 'Leave full screen (Esc, or Ctrl/Cmd+Shift+F)'
+                    : 'Full screen (Ctrl/Cmd+Shift+F)'
+                }
+              >
+                {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+              </button>
+            )}
             <button
               onClick={toggleMode}
               className="p-2.5 rounded-xl bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-900 transition-all"
               aria-label={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
             >
               {mode === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
             </button>
-            <div className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-              Offline Mode Active
+            <div
+              className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full flex items-center gap-2"
+              title={isOnline ? 'Connected to the till server' : 'No connection to the till server'}
+            >
+              <div className={cn("w-2 h-2 rounded-full", isOnline ? "bg-green-500 animate-pulse" : "bg-red-500")} />
+              {isOnline ? 'Connected' : 'Offline'}
             </div>
           </div>
         </header>

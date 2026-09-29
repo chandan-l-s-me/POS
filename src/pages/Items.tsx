@@ -1,5 +1,4 @@
-import React, { useState, useMemo } from 'react';
-import { useDataStore } from '../store/useDataStore';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useAuthStore } from '../store/useAuthStore';
 import { api } from '../api';
 import { 
@@ -20,11 +19,42 @@ import { cn } from '../lib/utils';
 export const Items = () => {
   const GST_OPTIONS = [0, 5, 12, 18, 28];
   const { user } = useAuthStore();
-  const { items, addItem, updateItem, removeItem } = useDataStore();
+  // This screen keeps its own rows rather than writing into the shared
+  // catalogue cache. It loads one 48-row page at a time, and pushing that page
+  // into the store overwrote the app-wide cache that the billing screen
+  // matches scans against — while leaving `itemsComplete` true, so billing did
+  // not fall back to server-side search either. After a visit here, most of
+  // the catalogue was simply unfindable at the till until a reload.
+  const [rows, setRows] = useState<Item[]>([]);
   const isAdmin = user?.role === 'admin';
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
+
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const PAGE_SIZE = 48;
+
+  useEffect(() => {
+    const handle = setTimeout(() => { setAppliedSearch(search.trim()); setPage(0); }, 300);
+    return () => clearTimeout(handle);
+  }, [search]);
+
+  // Search and paging happen in SQL. Filtering the cached page in the browser
+  // meant anything past the cache limit could not be found or edited at all.
+  // This page also needs the full rows (image_url) for its thumbnails.
+  const [loadError, setLoadError] = useState('');
+
+  const reload = useCallback(() => {
+    return api.getItemsPage({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, withImages: 1, search: appliedSearch || undefined })
+      .then((res) => { setRows(res?.data ?? []); setTotal(res?.total ?? 0); setLoadError(''); })
+      .catch((err: any) => setLoadError(err?.message || 'Could not load items.'));
+  }, [page, appliedSearch]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const [formData, setFormData] = useState<Partial<Item>>({
     name: '',
     hsn_code: '',
@@ -41,12 +71,8 @@ export const Items = () => {
     image_url: ''
   });
 
-  const filteredItems = useMemo(() => {
-    return items.filter(i => 
-      i.name.toLowerCase().includes(search.toLowerCase()) || 
-      i.hsn_code?.includes(search)
-    );
-  }, [items, search]);
+  // The server already applied the search, so this page's rows are the result.
+  const filteredItems = rows;
 
   const handleOpenModal = (item?: Item) => {
     if (item) {
@@ -92,12 +118,14 @@ export const Items = () => {
     try {
       if (editingItem) {
         await api.updateItem(editingItem.id, normalizedForm);
-        updateItem({ ...editingItem, ...normalizedForm } as Item);
       } else {
-        const result = await api.addItem(normalizedForm);
-        addItem({ ...normalizedForm, id: result.id, created_at: new Date().toISOString() } as Item);
+        await api.addItem(normalizedForm);
       }
       setShowModal(false);
+      // Re-read rather than splicing the form values into the list: the server
+      // normalises and bounds what it stores, so the row on screen should be
+      // what it actually holds.
+      await reload();
     } catch (err: any) {
       alert(err.message);
     }
@@ -107,7 +135,7 @@ export const Items = () => {
     if (window.confirm('Are you sure you want to delete this item?')) {
       try {
         await api.deleteItem(id);
-        removeItem(id);
+        await reload();
       } catch (err: any) {
         alert(err.message);
       }
@@ -144,11 +172,25 @@ export const Items = () => {
             <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center">
               <Package size={40} />
             </div>
-            <p className="font-medium">No items found</p>
-            {search ? (
-              <p className="text-sm">Try searching for something else</p>
+            {loadError ? (
+              <>
+                <p className="font-medium text-red-500">{loadError}</p>
+                <button
+                  onClick={() => reload()}
+                  className="px-4 py-2 rounded-xl bg-gray-100 font-semibold text-gray-600 hover:bg-gray-200 transition-all"
+                >
+                  Retry
+                </button>
+              </>
             ) : (
-              <p className="text-sm">Items will appear here once added</p>
+              <>
+                <p className="font-medium">No items found</p>
+                {search ? (
+                  <p className="text-sm">Try searching for something else</p>
+                ) : (
+                  <p className="text-sm">Items will appear here once added</p>
+                )}
+              </>
             )}
           </div>
         ) : (
@@ -212,6 +254,35 @@ export const Items = () => {
           </motion.div>
         )))}
       </div>
+
+      {/* Paging. `total` is a COUNT from the same query, so this reflects the
+          whole table, not just what happens to be cached. */}
+      {total > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-100 bg-white px-6 py-4">
+          <p className="text-sm text-gray-500">
+            Showing {page * PAGE_SIZE + 1}&ndash;{Math.min((page + 1) * PAGE_SIZE, total)} of {total.toLocaleString('en-IN')}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((current) => Math.max(0, current - 1))}
+              disabled={page === 0}
+              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              Previous
+            </button>
+            <span className="px-2 text-sm font-semibold text-gray-500">
+              Page {page + 1} of {pageCount.toLocaleString('en-IN')}
+            </span>
+            <button
+              onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
+              disabled={page >= pageCount - 1}
+              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Item Modal */}
       <AnimatePresence>

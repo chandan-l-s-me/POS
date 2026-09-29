@@ -7,6 +7,9 @@ export interface ListQuery {
   to?: string;
   limit?: number;
   offset?: number;
+  search?: string;
+  withImages?: 1;
+  order?: 'asc' | 'desc';
 }
 
 const buildQuery = (params?: ListQuery) => {
@@ -68,14 +71,29 @@ export const api = {
   getCashiers: () => fetchWithAuth('/cashiers'),
   addCashier: (cashier: { name: string; username: string; password: string }) => fetchWithAuth('/cashiers', { method: 'POST', body: JSON.stringify(cashier) }),
   
-  getItems: () => fetchWithAuth('/items'),
+  // The catalogue is cached client-side so the billing screen can match a
+  // scanned code without a round trip. It ships lean columns by default;
+  // the Items admin screen asks for the full row (including image_url).
+  getItems: (params?: ListQuery) => fetchWithAuth(`/items${buildQuery(params)}`).then(unwrap),
+  getItemsPage: (params?: ListQuery) => fetchWithAuth(`/items${buildQuery(params)}`),
   addItem: (item: any) => fetchWithAuth('/items', { method: 'POST', body: JSON.stringify(item) }),
   updateItem: (id: number, item: any) => fetchWithAuth(`/items/${id}`, { method: 'PUT', body: JSON.stringify(item) }),
   deleteItem: (id: number) => fetchWithAuth(`/items/${id}`, { method: 'DELETE' }),
 
-  getCustomers: () => fetchWithAuth('/customers'),
+  getCustomers: (params?: ListQuery) => fetchWithAuth(`/customers${buildQuery(params)}`).then(unwrap),
+  getCustomersPage: (params?: ListQuery) => fetchWithAuth(`/customers${buildQuery(params)}`),
+  getStats: () => fetchWithAuth('/stats'),
   addCustomer: (customer: any) => fetchWithAuth('/customers', { method: 'POST', body: JSON.stringify(customer) }),
   updateCustomer: (id: number, customer: any) => fetchWithAuth(`/customers/${id}`, { method: 'PUT', body: JSON.stringify(customer) }),
+
+  /** A customer's passbook: every bill, payment and correction, with the balance after each. */
+  getCustomerPassbook: (id: number, params?: ListQuery) =>
+    fetchWithAuth(`/customers/${id}/passbook${buildQuery(params)}`),
+  /** A customer's credit statement: every change to what they owe. */
+  getCustomerCreditEntries: (id: number, params?: ListQuery) =>
+    fetchWithAuth(`/customers/${id}/credit-entries${buildQuery(params)}`),
+  recordCreditPayment: (id: number, payload: { amount: number; note?: string }) =>
+    fetchWithAuth(`/customers/${id}/credit-payments`, { method: 'POST', body: JSON.stringify(payload) }),
 
   getSuppliers: () => fetchWithAuth('/suppliers'),
   addSupplier: (supplier: any) => fetchWithAuth('/suppliers', { method: 'POST', body: JSON.stringify(supplier) }),
@@ -96,6 +114,7 @@ export const api = {
 
   getAnalytics: () => fetchWithAuth('/analytics'),
   getAuditLogs: (params?: ListQuery) => fetchWithAuth(`/audit-logs${buildQuery(params)}`).then(unwrap),
+  getAuditLogsPage: (params?: ListQuery) => fetchWithAuth(`/audit-logs${buildQuery(params)}`),
   updateCashier: (id: number, payload: { is_active?: boolean; new_password?: string }) =>
     fetchWithAuth(`/cashiers/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
 };

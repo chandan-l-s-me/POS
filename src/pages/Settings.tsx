@@ -159,6 +159,59 @@ export const Settings = () => {
     }
   };
 
+  /**
+   * Deactivate/reactivate a cashier, and reset a forgotten password.
+   *
+   * The server has supported both since cashier accounts existed, and
+   * `api.updateCashier` was already defined — but nothing in the app ever
+   * called it. There was no way for an admin to revoke access when an employee
+   * left: the account kept working, on a machine that takes money, forever.
+   */
+  const [busyCashierId, setBusyCashierId] = useState<number | null>(null);
+
+  const applyCashierUpdate = async (
+    cashier: User & { is_active?: number },
+    payload: { is_active?: boolean; new_password?: string },
+    successMessage: string
+  ) => {
+    setBusyCashierId(cashier.id);
+    setCashierMessage('');
+    try {
+      const updated = await api.updateCashier(cashier.id, payload);
+      setCashiers((current) => current.map((row) => (row.id === cashier.id ? { ...row, ...updated } : row)));
+      setCashierMessage(successMessage);
+    } catch (err: any) {
+      setCashierMessage(err.message || 'Failed to update cashier.');
+    } finally {
+      setBusyCashierId(null);
+    }
+  };
+
+  const handleToggleCashierActive = (cashier: User & { is_active?: number }) => {
+    const deactivating = cashier.is_active !== 0;
+    if (deactivating && !window.confirm(
+      `Deactivate ${cashier.name}? They will be signed out immediately and cannot sign in again until reactivated. Their past bills are kept.`
+    )) return;
+
+    return applyCashierUpdate(
+      cashier,
+      { is_active: !deactivating },
+      deactivating ? `${cashier.name} deactivated and signed out.` : `${cashier.name} reactivated successfully.`
+    );
+  };
+
+  const handleResetCashierPassword = (cashier: User) => {
+    const next = window.prompt(
+      `New password for ${cashier.name} (at least 10 characters, with a letter and a number):`
+    );
+    if (next === null) return;
+    return applyCashierUpdate(
+      cashier,
+      { new_password: next },
+      `Password for ${cashier.name} reset successfully. They have been signed out.`
+    );
+  };
+
   const handleBackupNow = async () => {
     setIsBackingUp(true);
     setBackupMessage('');
@@ -452,14 +505,38 @@ export const Settings = () => {
               </div>
             ) : (
               cashiers.map((cashier) => (
-                <div key={cashier.id} className="flex items-center justify-between gap-4 px-4 py-4 rounded-2xl bg-gray-50 border border-gray-100">
+                <div key={cashier.id} className="flex flex-wrap items-center justify-between gap-4 px-4 py-4 rounded-2xl bg-gray-50 border border-gray-100">
                   <div>
                     <p className="font-semibold text-gray-900">{cashier.name}</p>
                     <p className="text-sm text-gray-500">@{cashier.username}</p>
                   </div>
-                  <span className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700 bg-emerald-100 px-3 py-2 rounded-full">
-                    Cashier
-                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`text-xs font-semibold uppercase tracking-[0.2em] px-3 py-2 rounded-full ${
+                        (cashier as any).is_active === 0
+                          ? 'text-red-600 bg-red-50'
+                          : 'text-emerald-700 bg-emerald-100'
+                      }`}
+                    >
+                      {(cashier as any).is_active === 0 ? 'Inactive' : 'Active'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleResetCashierPassword(cashier)}
+                      disabled={busyCashierId === cashier.id}
+                      className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:bg-gray-100 disabled:opacity-40 disabled:pointer-events-none"
+                    >
+                      Reset Password
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleCashierActive(cashier as any)}
+                      disabled={busyCashierId === cashier.id}
+                      className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:bg-gray-100 disabled:opacity-40 disabled:pointer-events-none"
+                    >
+                      {(cashier as any).is_active === 0 ? 'Reactivate' : 'Deactivate'}
+                    </button>
+                  </div>
                 </div>
               ))
             )}

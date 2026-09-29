@@ -18,15 +18,17 @@ import {
   ReceiptText,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useReactToPrint } from 'react-to-print';
+// Not useReactToPrint directly: printing must not drop the till out of full screen.
+import { usePrint } from '../hooks/usePrint';
 import { Receipt } from '../components/Receipt';
 import { Customer, Item } from '../types';
+import { customerContactName, customerDisplayName } from '../lib/customer';
 
 const normalizeCustomerKey = (value: string) => value.trim().toLowerCase();
 const GST_OPTIONS = [0, 5, 12, 18, 28];
 
 export const Billing = () => {
-  const { items, customers, settings, setItems, setCustomers } = useDataStore();
+  const { items, customers, settings, refreshItems, setCustomers, itemsComplete } = useDataStore();
   const {
     carts,
     activeCartId,
@@ -99,7 +101,7 @@ export const Billing = () => {
   const totals = activeCart?.totals || { subtotal: 0, tax: 0, total: 0 };
 
   const receiptRef = useRef<HTMLDivElement>(null);
-  const handlePrint = useReactToPrint({
+  const handlePrint = usePrint({
     contentRef: receiptRef,
   });
 
@@ -112,7 +114,7 @@ export const Billing = () => {
     handlePrint();
   };
 
-  const filteredItems = useMemo(() => {
+  const localItemMatches = useMemo(() => {
     if (!search) return [];
 
     return items
@@ -124,26 +126,66 @@ export const Billing = () => {
       .slice(0, 8);
   }, [items, search]);
 
+  // When the catalogue is larger than the local cache, items beyond it used to
+  // be unreachable: unscannable, unbillable and invisible, with no error. Ask
+  // the server whenever the cache can't answer for certain.
+  const [remoteItemMatches, setRemoteItemMatches] = useState<Item[]>([]);
+
+  useEffect(() => {
+    if (itemsComplete || !search.trim()) {
+      setRemoteItemMatches([]);
+      return;
+    }
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      api.getItems({ search: search.trim(), limit: 8 })
+        .then((rows) => { if (!cancelled) setRemoteItemMatches(rows ?? []); })
+        .catch(() => { if (!cancelled) setRemoteItemMatches([]); });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [search, itemsComplete]);
+
+  const filteredItems = useMemo(() => {
+    if (itemsComplete) return localItemMatches;
+    // Merge, preferring the cached rows and de-duplicating by id.
+    const seen = new Set(localItemMatches.map((item) => item.id));
+    return [...localItemMatches, ...remoteItemMatches.filter((item) => !seen.has(item.id))].slice(0, 8);
+  }, [itemsComplete, localItemMatches, remoteItemMatches]);
+
   const customerSuggestions = useMemo(() => {
-    const query = normalizeCustomerKey(customerQuery || customer?.name || '');
+    const query = normalizeCustomerKey(customerQuery || customerDisplayName(customer));
+    // The server sends customers already sorted by bakery/shop name.
     if (!query) return customers.slice(0, 8);
 
-    return customers
-      .filter(
-        (customerItem) =>
-          normalizeCustomerKey(customerItem.name).includes(query) ||
-          customerItem.phone.includes(query) ||
-          normalizeCustomerKey(customerItem.shop_name || '').includes(query) ||
-          normalizeCustomerKey(customerItem.gstin || '').includes(query)
-      )
-      .slice(0, 8);
+    const matches = customers.filter(
+      (customerItem) =>
+        normalizeCustomerKey(customerItem.shop_name || '').includes(query) ||
+        normalizeCustomerKey(customerItem.name || '').includes(query) ||
+        (customerItem.phone || '').includes(query) ||
+        normalizeCustomerKey(customerItem.gstin || '').includes(query)
+    );
+
+    // Customers whose bakery/shop name *starts* with what was typed come
+    // first, so "sri" puts "Sri Ganesh Bakery" above a customer who merely
+    // has "sri" somewhere in the owner's name. Stable otherwise.
+    const rank = (customerItem: Customer) =>
+      normalizeCustomerKey(customerDisplayName(customerItem)).startsWith(query) ? 0 : 1;
+    return [...matches].sort((a, b) => rank(a) - rank(b)).slice(0, 8);
   }, [customers, customerQuery, customer]);
+
+  // Customers are no longer preloaded app-wide, so the billing screen fetches
+  // the list it needs for the customer picker.
+  useEffect(() => {
+    api.getCustomers({ limit: 1000 })
+      .then(setCustomers)
+      .catch(() => console.error('Could not load customers.'));
+  }, [setCustomers]);
 
   useEffect(() => {
     setQuantityInputs({});
     setShowCustomerSuggestions(false);
     if (customer) {
-      setCustomerQuery(customer.name);
+      setCustomerQuery(customerDisplayName(customer));
       setCustomerForm({
         customer_phone: customer.phone || '',
         customer_gstin: customer.gstin || '',
@@ -168,7 +210,7 @@ export const Billing = () => {
 
   useEffect(() => {
     if (customer) {
-      setCustomerQuery(customer.name);
+      setCustomerQuery(customerDisplayName(customer));
       setCustomerForm({
         customer_phone: customer.phone || '',
         customer_gstin: customer.gstin || '',
@@ -232,7 +274,7 @@ export const Billing = () => {
 
   const selectCustomer = (nextCustomer: Customer) => {
     setCustomer(nextCustomer);
-    setCustomerQuery(nextCustomer.name);
+    setCustomerQuery(customerDisplayName(nextCustomer));
     setCustomerForm({
       customer_phone: nextCustomer.phone || '',
       customer_gstin: nextCustomer.gstin || '',
@@ -253,10 +295,13 @@ export const Billing = () => {
   };
 
   const openCreateCustomerModal = (nameHint = '') => {
+    // What the cashier typed into the picker goes into the bakery/shop field,
+    // because that is how customers here are asked for. For an individual
+    // with no shop, the form lets them move it to the person's name instead.
     setNewCustomerForm({
-      name: nameHint || customerQuery.trim(),
+      name: '',
       phone: customerForm.customer_phone.trim(),
-      shop_name: '',
+      shop_name: nameHint || customerQuery.trim(),
       address: customerForm.customer_address.trim(),
       gstin: customerForm.customer_gstin.trim(),
       credit_balance: 0,
@@ -266,8 +311,8 @@ export const Billing = () => {
 
   const handleCreateCustomer = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!newCustomerForm.name?.trim()) {
-      alert('Customer name is required.');
+    if (!newCustomerForm.shop_name?.trim() && !newCustomerForm.name?.trim()) {
+      alert('Enter the bakery / shop name, or the customer’s name if they have no shop.');
       return;
     }
     if (!newCustomerForm.phone?.trim()) {
@@ -277,7 +322,7 @@ export const Billing = () => {
 
     try {
       const payload = {
-        name: newCustomerForm.name.trim(),
+        name: newCustomerForm.name?.trim() || '',
         phone: newCustomerForm.phone.trim(),
         shop_name: newCustomerForm.shop_name?.trim() || '',
         address: newCustomerForm.address?.trim() || '',
@@ -285,7 +330,7 @@ export const Billing = () => {
         credit_balance: Number(newCustomerForm.credit_balance || 0),
       };
       const result = await api.addCustomer(payload);
-      const latestCustomers = await api.getCustomers();
+      const latestCustomers = await api.getCustomers({ limit: 1000 });
       setCustomers(latestCustomers);
       setShowCreateCustomerModal(false);
 
@@ -344,10 +389,10 @@ export const Billing = () => {
       };
 
       const result = await api.addItem(normalizedItem);
-      const latestItems = await api.getItems();
-      setItems(latestItems);
+      await refreshItems();
       setShowCreateItemModal(false);
 
+      const latestItems = useDataStore.getState().items;
       const createdItem = latestItems.find((item: Item) => item.id === result.id);
       if (createdItem) {
         addItem(createdItem);
@@ -407,11 +452,54 @@ export const Billing = () => {
     };
   };
 
+  /**
+   * Save any edits the cashier made to the selected customer's phone, GSTIN or
+   * address before the sale is written.
+   *
+   * These three fields are editable on this screen but were never sent
+   * anywhere: a bill stores only `customer_id`, and the receipt reads the
+   * contact details back from the customers table. So a cashier who corrected
+   * a GSTIN at the till watched it save, printed an invoice with the old one,
+   * and the correction was gone on the next bill. Persisting them here is what
+   * the form has always implied it does.
+   */
+  const persistCustomerDetailEdits = async () => {
+    if (!customer) return;
+
+    const nextPhone = customerForm.customer_phone.trim();
+    const nextGstin = customerForm.customer_gstin.trim();
+    const nextAddress = customerForm.customer_address.trim();
+
+    const unchanged =
+      nextPhone === (customer.phone || '') &&
+      nextGstin === (customer.gstin || '') &&
+      nextAddress === (customer.address || '');
+    if (unchanged) return;
+
+    // A phone number is the customer's unique key, so an empty one would be
+    // rejected — keep the stored value rather than failing the sale over it.
+    const payload = {
+      name: customer.name,
+      phone: nextPhone || customer.phone,
+      shop_name: customer.shop_name || '',
+      address: nextAddress,
+      gstin: nextGstin,
+    };
+
+    await api.updateCustomer(customer.id, payload);
+    const updated = { ...customer, ...payload } as Customer;
+    setCustomer(updated);
+    setCustomers(customers.map((entry) => (entry.id === updated.id ? updated : entry)));
+  };
+
   const processSale = async () => {
     setShowConfirmModal(false);
     setIsProcessing(true);
 
     try {
+      // Before the bill, so the invoice prints the details just entered.
+      await persistCustomerDetailEdits();
+
       const billData = {
         customer_id: customer?.id || null,
         items: cartItems.map((item) => ({
@@ -434,7 +522,12 @@ export const Billing = () => {
 
       const result = await api.createBill(billData);
       setLastBillId(result.bill_id);
-      setShowSuccessModal(false);
+      // Show the confirmation. This was `false`, so the modal below — with the
+      // receipt preview and the reprint button — was unreachable: a completed
+      // sale gave the cashier no on-screen confirmation at all, and if the
+      // print silently failed there was no way to reprint without going to
+      // History and searching for the bill.
+      setShowSuccessModal(true);
       clearCart();
       setAutoPrintPending(true);
     } catch (err: any) {
@@ -467,17 +560,17 @@ export const Billing = () => {
                 <div
                   key={cart.id}
                   className={cn(
-                    "flex items-center gap-2 rounded-2xl border px-4 py-3 shadow-sm transition-all",
+                    "flex min-h-[4.5rem] min-w-[11rem] items-center justify-between gap-3 rounded-2xl border px-5 py-3 shadow-sm transition-all",
                     cart.id === activeCartId
                       ? "border-transparent bg-gradient-to-r from-[#232d9b] via-[#5534b7] to-[#b153d7] text-white"
                       : "border-[#e5ddff] bg-white text-[#4d5688]"
                   )}
                 >
-                  <button onClick={() => setActiveCart(cart.id)} className="text-left">
-                    <p className="whitespace-nowrap text-sm font-bold">{cart.name}</p>
-                    <p className="whitespace-nowrap text-xs opacity-80">
+                  <button onClick={() => setActiveCart(cart.id)} className="flex-1 text-left">
+                    <p className="whitespace-nowrap text-base font-bold leading-tight">{cart.name}</p>
+                    <p className="mt-0.5 whitespace-nowrap text-xs opacity-80">
                       {cart.items.length} items
-                      {cart.customer ? ` | ${cart.customer.name}` : ''}
+                      {cart.customer ? ` | ${customerDisplayName(cart.customer)}` : ''}
                     </p>
                   </button>
                   {carts.length > 1 && (
@@ -493,7 +586,7 @@ export const Billing = () => {
               ))}
               <button
                 onClick={addBillingTab}
-                className="flex items-center gap-2 rounded-2xl border border-dashed border-[#c8baf9] bg-white px-4 py-3 font-semibold text-[#5534b7] transition-all hover:bg-[#f9f6ff]"
+                className="flex min-h-[4.5rem] items-center gap-2 rounded-2xl border border-dashed border-[#c8baf9] bg-white px-5 py-3 font-semibold text-[#5534b7] transition-all hover:bg-[#f9f6ff]"
               >
                 <Plus size={16} />
                 New Bill
@@ -505,7 +598,7 @@ export const Billing = () => {
         <div className="px-8 py-8">
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_220px]">
             <div className="space-y-2 relative">
-              <label className="text-sm font-semibold text-[#24306c]">Customer Name</label>
+              <label className="text-sm font-semibold text-[#24306c]">Customer (Bakery / Shop)</label>
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#9a94c9]" size={18} />
                 <input
@@ -515,7 +608,7 @@ export const Billing = () => {
                     const nextValue = e.target.value;
                     setCustomerQuery(nextValue);
                     setShowCustomerSuggestions(true);
-                    if (!customer || normalizeCustomerKey(nextValue) !== normalizeCustomerKey(customer.name)) {
+                    if (!customer || normalizeCustomerKey(nextValue) !== normalizeCustomerKey(customerDisplayName(customer))) {
                       setCustomer(null);
                     }
                   }}
@@ -524,10 +617,13 @@ export const Billing = () => {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
-                      const exactMatch = customers.find(
-                        (customerItem) =>
-                          normalizeCustomerKey(customerItem.name) === normalizeCustomerKey(customerQuery)
-                      );
+                      // An exact hit on the bakery/shop name wins; the
+                      // person's name still counts, for shopless customers
+                      // and for a cashier who knows the owner.
+                      const typed = normalizeCustomerKey(customerQuery);
+                      const exactMatch =
+                        customers.find((customerItem) => normalizeCustomerKey(customerItem.shop_name || '') === typed) ||
+                        customers.find((customerItem) => normalizeCustomerKey(customerItem.name || '') === typed);
                       const firstMatch = customerSuggestions[0];
                       if (exactMatch || firstMatch) {
                         selectCustomer(exactMatch || firstMatch);
@@ -544,7 +640,7 @@ export const Billing = () => {
                       }
                     }
                   }}
-                  placeholder="Type customer name"
+                  placeholder="Type bakery / shop name, or customer name"
                   className="w-full rounded-2xl border border-[#ddd3ff] bg-[#f9f7ff] py-3 pl-11 pr-4 text-[#1d285f] outline-none transition-all focus:border-[#b89dff] focus:ring-2 focus:ring-[#d7c9ff]"
                 />
               </div>
@@ -558,9 +654,13 @@ export const Billing = () => {
                       onMouseDown={() => selectCustomer(customerItem)}
                       className="w-full px-4 py-3 text-left transition-colors hover:bg-[#f9f4ff]"
                     >
-                      <p className="font-semibold text-gray-900">{customerItem.name}</p>
+                      <p className="font-semibold text-gray-900">{customerDisplayName(customerItem)}</p>
                       <p className="text-xs text-gray-500">
-                        {customerItem.phone || 'No phone'} | {customerItem.gstin || 'No GSTIN'}
+                        {[
+                          customerContactName(customerItem),
+                          customerItem.phone || 'No phone',
+                          customerItem.gstin || 'No GSTIN',
+                        ].filter(Boolean).join(' | ')}
                       </p>
                     </button>
                   ))}
@@ -602,11 +702,13 @@ export const Billing = () => {
               <span className="text-sm font-semibold text-[#24306c]">Customer Phone</span>
               <input
                 type="text"
+                disabled={!customer}
+                placeholder={customer ? '' : 'Select a customer first'}
                 value={customerForm.customer_phone}
                 onChange={(e) =>
                   setCustomerForm((current) => ({ ...current, customer_phone: e.target.value }))
                 }
-                className="w-full rounded-2xl border border-[#ddd3ff] bg-[#f9f7ff] px-4 py-3 text-[#1d285f] outline-none transition-all focus:border-[#b89dff] focus:ring-2 focus:ring-[#d7c9ff]"
+                className="w-full rounded-2xl border border-[#ddd3ff] bg-[#f9f7ff] px-4 py-3 text-[#1d285f] outline-none transition-all focus:border-[#b89dff] focus:ring-2 focus:ring-[#d7c9ff] disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
 
@@ -614,6 +716,8 @@ export const Billing = () => {
               <span className="text-sm font-semibold text-[#24306c]">Customer GSTIN</span>
               <input
                 type="text"
+                disabled={!customer}
+                placeholder={customer ? '' : 'Select a customer first'}
                 value={customerForm.customer_gstin}
                 onChange={(e) =>
                   setCustomerForm((current) => ({
@@ -621,7 +725,7 @@ export const Billing = () => {
                     customer_gstin: e.target.value.toUpperCase(),
                   }))
                 }
-                className="w-full rounded-2xl border border-[#ddd3ff] bg-[#f9f7ff] px-4 py-3 text-[#1d285f] outline-none transition-all focus:border-[#b89dff] focus:ring-2 focus:ring-[#d7c9ff]"
+                className="w-full rounded-2xl border border-[#ddd3ff] bg-[#f9f7ff] px-4 py-3 text-[#1d285f] outline-none transition-all focus:border-[#b89dff] focus:ring-2 focus:ring-[#d7c9ff] disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
 
@@ -643,11 +747,13 @@ export const Billing = () => {
             <span className="text-sm font-semibold text-[#24306c]">Customer Address</span>
             <input
               type="text"
+              disabled={!customer}
+              placeholder={customer ? '' : 'Select a customer first'}
               value={customerForm.customer_address}
               onChange={(e) =>
                 setCustomerForm((current) => ({ ...current, customer_address: e.target.value }))
               }
-              className="w-full rounded-2xl border border-[#ddd3ff] bg-[#f9f7ff] px-4 py-3 text-[#1d285f] outline-none transition-all focus:border-[#b89dff] focus:ring-2 focus:ring-[#d7c9ff]"
+              className="w-full rounded-2xl border border-[#ddd3ff] bg-[#f9f7ff] px-4 py-3 text-[#1d285f] outline-none transition-all focus:border-[#b89dff] focus:ring-2 focus:ring-[#d7c9ff] disabled:cursor-not-allowed disabled:opacity-60"
             />
           </label>
 
@@ -1021,7 +1127,7 @@ export const Billing = () => {
                 <p className="text-xs font-bold uppercase tracking-wide text-[#5f68a1]">Ready To Bill</p>
                 <p className="mt-3 text-3xl font-black text-[#0f1d59]">Rs. {totals.total.toFixed(2)}</p>
                 <p className="mt-2 text-sm text-[#7a73a6]">
-                  {customer ? `Billing for ${customer.name}` : 'Walk-in billing is active'}
+                  {customer ? `Billing for ${customerDisplayName(customer)}` : 'Walk-in billing is active'}
                 </p>
               </div>
 
@@ -1096,13 +1202,44 @@ export const Billing = () => {
 
               <div className="grid max-h-[70vh] grid-cols-2 gap-6 overflow-auto p-8">
                 <div className="col-span-2 space-y-2">
-                  <label className="text-sm font-bold text-gray-700">Customer Name</label>
+                  <label className="text-sm font-bold text-gray-700">Bakery / Shop Name</label>
+                  <input
+                    type="text"
+                    value={newCustomerForm.shop_name || ''}
+                    onChange={(e) => setNewCustomerForm((current) => ({ ...current, shop_name: e.target.value }))}
+                    placeholder="e.g. Sri Ganesh Bakery"
+                    className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                  {/* What was typed in the picker lands here. For an individual
+                      with no shop, one click moves it to the person's name. */}
+                  {newCustomerForm.shop_name?.trim() && !newCustomerForm.name?.trim() ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setNewCustomerForm((current) => ({ ...current, name: current.shop_name || '', shop_name: '' }))
+                      }
+                      className="text-xs font-semibold text-[#5a3fc0] hover:underline"
+                    >
+                      No bakery or shop? Use this as the customer’s name instead
+                    </button>
+                  ) : (
+                    <p className="text-xs text-gray-500">Leave blank if the customer has no bakery or shop.</p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-gray-700">
+                    Customer / Contact Name
+                    {newCustomerForm.shop_name?.trim() ? (
+                      <span className="ml-1 font-normal text-gray-400">(optional)</span>
+                    ) : null}
+                  </label>
                   <input
                     type="text"
                     value={newCustomerForm.name || ''}
                     onChange={(e) => setNewCustomerForm((current) => ({ ...current, name: e.target.value }))}
+                    placeholder={newCustomerForm.shop_name?.trim() ? 'Who to ask for' : 'Required if no bakery / shop'}
                     className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:ring-2 focus:ring-orange-500"
-                    required
                   />
                 </div>
 
@@ -1114,16 +1251,6 @@ export const Billing = () => {
                     onChange={(e) => setNewCustomerForm((current) => ({ ...current, phone: e.target.value }))}
                     className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:ring-2 focus:ring-orange-500"
                     required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-700">Shop Name</label>
-                  <input
-                    type="text"
-                    value={newCustomerForm.shop_name || ''}
-                    onChange={(e) => setNewCustomerForm((current) => ({ ...current, shop_name: e.target.value }))}
-                    className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
 
@@ -1384,7 +1511,6 @@ export const Billing = () => {
           {lastBillId && (
             <Receipt
               billId={lastBillId}
-              layoutOverride="standard"
               onDataLoaded={() => {
                 if (autoPrintPending) {
                   setAutoPrintPending(false);

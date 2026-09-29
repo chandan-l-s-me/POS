@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
 import { api } from '../api';
 import { motion } from 'motion/react';
-import { Lock, User, Eye, EyeOff } from 'lucide-react';
+import { Lock, User, Eye, EyeOff, Maximize, Minimize } from 'lucide-react';
+import { useFullscreen } from '../hooks/useFullscreen';
 
 export const Login = () => {
   const [username, setUsername] = useState('');
@@ -14,6 +15,11 @@ export const Login = () => {
   
   const setAuth = useAuthStore((state) => state.setAuth);
   const navigate = useNavigate();
+  // The counter machine usually sits on this screen between shifts, so the
+  // option belongs here as well — otherwise the only way to go full screen is
+  // to sign in first.
+  const { isSupported: canFullscreen, isFullscreen, toggle: toggleFullscreen } =
+    useFullscreen({ restoreOnNextGesture: true });
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,7 +38,23 @@ export const Login = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6 relative">
+      {canFullscreen && (
+        <button
+          type="button"
+          onClick={() => void toggleFullscreen()}
+          className="absolute top-6 right-6 p-2.5 rounded-xl bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-900 transition-all"
+          aria-label={isFullscreen ? 'Leave full screen' : 'Enter full screen'}
+          aria-pressed={isFullscreen}
+          title={
+            isFullscreen
+              ? 'Leave full screen (Esc, or Ctrl/Cmd+Shift+F)'
+              : 'Full screen (Ctrl/Cmd+Shift+F)'
+          }
+        >
+          {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+        </button>
+      )}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}

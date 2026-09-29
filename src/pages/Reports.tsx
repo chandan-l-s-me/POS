@@ -3,6 +3,7 @@ import { Download, FileSpreadsheet, Search } from 'lucide-react';
 import { api } from '../api';
 import { Bill, Purchase } from '../types';
 import { formatDateInIST, formatDateTimeInIST, getISTDateKey, getISTTimestampForFileName } from '../lib/utils';
+import { billCustomerContactName, billCustomerDisplayName } from '../lib/customer';
 
 interface PurchaseReportRow {
   purchase_id: number;
@@ -33,6 +34,7 @@ interface SalesReportRow {
   payment_method: string;
   created_at: string;
   customer_name?: string;
+  customer_shop_name?: string | null;
   customer_phone?: string;
   cashier_name: string;
   item_id: number;
@@ -82,20 +84,35 @@ export const Reports = () => {
   // The date range is sent to the server so it filters in SQL. Loading every
   // bill and line item and filtering in the browser stops working long before
   // a year's worth of transactions accumulates.
+  // Server-side caps. A report over a wide range can match millions of line
+  // items; rather than trying to ship them all, we take a bounded slice and
+  // tell the user plainly when the range is too wide.
+  const REPORT_LIMIT = 5000;
+  const [truncated, setTruncated] = useState(false);
+
   useEffect(() => {
     const range = { from: startDate || undefined, to: endDate || undefined };
     setLoading(true);
     Promise.all([
       api.getBills({ ...range, limit: 1000 }),
-      api.getPurchases({ limit: 1000 }),
-      api.getPurchaseItemReport(range),
-      api.getSalesItemReport(range),
+      // The range must go to the server here too. Fetching the most recent
+      // 1000 purchases and filtering them in the browser meant an older range
+      // returned nothing once the shop had more than 1000 purchases, and the
+      // purchase totals beside the sales totals were quietly wrong.
+      api.getPurchases({ ...range, limit: 1000 }),
+      api.getPurchaseItemReport({ ...range, limit: REPORT_LIMIT }),
+      api.getSalesItemReport({ ...range, limit: REPORT_LIMIT }),
     ])
       .then(([billData, purchaseData, purchaseItemData, salesItemData]) => {
         setBills(billData);
         setPurchases(purchaseData);
         setPurchaseRows(purchaseItemData);
         setSalesRows(salesItemData);
+        setTruncated(
+          billData.length >= 1000 ||
+          purchaseItemData.length >= REPORT_LIMIT ||
+          salesItemData.length >= REPORT_LIMIT
+        );
       })
       .catch((err) => {
         console.error('Failed to load reports:', err);
@@ -118,6 +135,7 @@ export const Reports = () => {
       const matchesSearch =
         normalizedSearch.length === 0 ||
         bill.bill_number.toLowerCase().includes(normalizedSearch) ||
+        (bill.customer_shop_name || '').toLowerCase().includes(normalizedSearch) ||
         (bill.customer_name || '').toLowerCase().includes(normalizedSearch) ||
         bill.cashier_name.toLowerCase().includes(normalizedSearch);
 
@@ -158,6 +176,7 @@ export const Reports = () => {
       const matchesSearch =
         normalizedSearch.length === 0 ||
         row.bill_number.toLowerCase().includes(normalizedSearch) ||
+        (row.customer_shop_name || '').toLowerCase().includes(normalizedSearch) ||
         (row.customer_name || '').toLowerCase().includes(normalizedSearch) ||
         row.cashier_name.toLowerCase().includes(normalizedSearch) ||
         row.item_name.toLowerCase().includes(normalizedSearch) ||
@@ -180,11 +199,12 @@ export const Reports = () => {
 
     downloadCsv(
       `sales-report-${getISTTimestampForFileName()}.csv`,
-      ['Bill Number', 'Date & Time', 'Customer', 'Cashier', 'Payment Method', 'Item', 'HSN', 'Quantity', 'Metric', 'Base Price', 'SGST Amount', 'Other GST Amount', 'Line Total'],
+      ['Bill Number', 'Date & Time', 'Customer', 'Contact Person', 'Cashier', 'Payment Method', 'Item', 'HSN', 'Quantity', 'Metric', 'Base Price', 'SGST Amount', 'Other GST Amount', 'Line Total'],
       filteredSalesRows.map((row) => [
         row.bill_number,
         formatDateTimeInIST(row.created_at, { month: '2-digit', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        row.customer_name || 'Walk-in',
+        billCustomerDisplayName(row),
+        billCustomerContactName(row) || '',
         row.cashier_name,
         row.payment_method,
         row.item_name,
@@ -232,6 +252,12 @@ export const Reports = () => {
 
   return (
     <div className="space-y-6">
+      {truncated && (
+        <div className="rounded-2xl border border-orange-200 bg-orange-50 px-6 py-4 text-sm font-semibold text-orange-700">
+          This date range matches more rows than can be shown at once. Figures below cover only
+          the first {REPORT_LIMIT.toLocaleString('en-IN')} line items &mdash; narrow the date range for a complete report.
+        </div>
+      )}
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6">
         <div className="flex items-start gap-4">
           <div className="w-14 h-14 rounded-2xl bg-orange-100 text-orange-600 flex items-center justify-center">
@@ -408,7 +434,7 @@ export const Reports = () => {
                   <tr key={`${row.bill_id}-${row.item_id}-${index}`} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4 font-mono font-bold text-gray-900">{row.bill_number}</td>
                     <td className="px-6 py-4 text-sm text-gray-600">{formatDateTimeInIST(row.created_at)}</td>
-                    <td className="px-6 py-4 text-sm text-gray-700">{row.customer_name || 'Walk-in'}</td>
+                    <td className="px-6 py-4 text-sm text-gray-700">{billCustomerDisplayName(row)}</td>
                     <td className="px-6 py-4 text-sm text-gray-600">{row.cashier_name}</td>
                     <td className="px-6 py-4 text-sm uppercase text-gray-600">{row.payment_method}</td>
                     <td className="px-6 py-4">

@@ -1,14 +1,18 @@
 {
-  "name": "react-example",
+  "name": "vyapara-billing",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
+    "start": "NODE_ENV=production tsx server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "npm run build && tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test:only": "tsx --test --test-concurrency=1 tests/*.test.ts",
+    "seed:demo": "tsx scripts/seed-demo.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

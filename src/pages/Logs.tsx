@@ -4,32 +4,46 @@ import { AuditLog } from '../types';
 import { Search, Shield, Activity } from 'lucide-react';
 import { formatDateTimeInIST } from '../lib/utils';
 
+const PAGE_SIZE = 200;
+
 export const Logs = () => {
   const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
+  // The audit trail is pruned on the server (see AUDIT_LOG_RETENTION_DAYS) and
+  // paged here, so this screen no longer grows with the table.
   useEffect(() => {
-    api.getAuditLogs({ limit: 500 })
-      .then((data) => setLogs(Array.isArray(data) ? data : []))
-      .catch((err: any) => {
-        alert(`Failed to load logs: ${err.message}`);
+    const handle = setTimeout(() => { setAppliedSearch(search.trim()); setPage(0); }, 300);
+    return () => clearTimeout(handle);
+  }, [search]);
+
+  // `page` was in state but nothing ever changed it and no controls were
+  // rendered, so only the newest 200 entries were reachable — on an audit trail
+  // kept for 400 days, the rest of the record was simply unreadable.
+  useEffect(() => {
+    setLoading(true);
+    // getAuditLogs unwraps to a bare array, which threw the row count away and
+    // left the header showing the page size instead of the real total.
+    api.getAuditLogsPage({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, search: appliedSearch || undefined })
+      .then((res) => {
+        setLogs(res?.data ?? []);
+        setTotal(res?.total ?? 0);
+        setLoadError('');
       })
+      .catch((err: any) => setLoadError(err?.message || 'Failed to load logs.'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [page, appliedSearch]);
 
-  const filteredLogs = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return logs;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-    return logs.filter((log) =>
-      log.user_name.toLowerCase().includes(query) ||
-      log.user_role.toLowerCase().includes(query) ||
-      log.action.toLowerCase().includes(query) ||
-      log.entity_type.toLowerCase().includes(query) ||
-      log.details.toLowerCase().includes(query)
-    );
-  }, [logs, search]);
+  // The server already applied the search across all retained rows, not just
+  // the page held in memory.
+  const filteredLogs = logs;
 
   return (
     <div className="space-y-6">
@@ -62,7 +76,7 @@ export const Logs = () => {
         </div>
         <div className="flex items-center gap-2 px-4 py-3 bg-white border border-gray-200 rounded-2xl text-gray-600 font-semibold whitespace-nowrap">
           <Activity size={18} />
-          {filteredLogs.length} records
+          {total.toLocaleString('en-IN')} records
         </div>
       </div>
 
@@ -81,6 +95,10 @@ export const Logs = () => {
             {loading ? (
               <tr>
                 <td colSpan={5} className="px-6 py-12 text-center text-gray-400">Loading logs...</td>
+              </tr>
+            ) : loadError ? (
+              <tr>
+                <td colSpan={5} className="px-6 py-12 text-center text-red-500">{loadError}</td>
               </tr>
             ) : filteredLogs.length === 0 ? (
               <tr>
@@ -111,6 +129,33 @@ export const Logs = () => {
             )}
           </tbody>
         </table>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-6 py-4">
+          <p className="text-sm text-gray-500">
+            {total === 0
+              ? 'No log entries match this filter'
+              : `Showing ${page * PAGE_SIZE + 1}\u2013${Math.min((page + 1) * PAGE_SIZE, total)} of ${total.toLocaleString('en-IN')}`}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((current) => Math.max(0, current - 1))}
+              disabled={page === 0 || loading}
+              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              Previous
+            </button>
+            <span className="px-2 text-sm font-semibold text-gray-500">
+              Page {page + 1} of {pageCount.toLocaleString('en-IN')}
+            </span>
+            <button
+              onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
+              disabled={page >= pageCount - 1 || loading}
+              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

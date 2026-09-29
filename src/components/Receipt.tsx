@@ -3,6 +3,7 @@ import { api } from '../api';
 import { Bill } from '../types';
 import { useDataStore } from '../store/useDataStore';
 import { formatDateInIST, formatDateTimeCompactInIST } from '../lib/utils';
+import { billCustomerContactName, billCustomerDisplayName } from '../lib/customer';
 
 interface ReceiptProps {
   billId: number;
@@ -155,10 +156,22 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
     );
   }
 
-  const subtotal = bill.total_amount - bill.tax_amount + bill.discount_amount;
-  const roundedTotal = Math.round(bill.total_amount);
-  const roundOff = roundedTotal - bill.total_amount;
-  const shopState = {name: "Karnataka", code: "29" };
+  // Use the subtotal stored on the bill at the time of sale. It is the figure
+  // the sale was actually rung up against; re-deriving it here (or, worse, as
+  // `total - tax + discount`, which folds in the paise the grand total drops
+  // when it is floored) is how the printed invoice and the on-screen summary
+  // came to disagree. Fall back to the line items only for bills written
+  // before the column existed.
+  const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+  const subtotal = round2(bill.subtotal_amount ?? gstSummary.taxableValue);
+  const grossTotal = round2(subtotal + bill.tax_amount - bill.discount_amount);
+  // bills.total_amount is already the floored, collected figure.
+  const roundedTotal = bill.total_amount;
+  const roundOff = round2(roundedTotal - grossTotal);
+  // The shop's state comes from its own GSTIN, not a hardcoded one. This was
+  // pinned to Karnataka, so every invoice a shop in any other state printed
+  // declared the wrong place of supply.
+  const shopState = getStateFromGstin(settings.shop_gstin);
   const customerState = getStateFromGstin(bill.customer_gstin);
 
   const lineRows = (bill.items || []).map((item) => {
@@ -209,7 +222,7 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
 
   if (activeFormat === 'standard') {
     return (
-      <div className="mx-auto w-full max-w-[210mm] border-2 border-black p-1.5 text-[9.5px] leading-tight text-black" style={{ backgroundColor: '#fff' }}>
+      <div className="receipt-paper mx-auto w-full max-w-[210mm] border-2 border-black p-1.5 text-[9.5px] leading-tight text-black">
         <div className="border border-black px-2 py-1 text-center text-[12px] font-bold tracking-[0.12em]">TAX INVOICE</div>
 
         <div className="mt-1 grid grid-cols-[1.2fr_0.8fr] gap-0">
@@ -245,7 +258,11 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
         <div className="mt-1 grid grid-cols-[1.2fr_0.8fr] gap-0">
           <div className="border border-black p-2">
             <p className="font-semibold uppercase tracking-wide">Bill To</p>
-            <p className="mt-1 font-bold uppercase">{bill.customer_name || 'Walk-in Customer'}</p>
+            {/* Billed to the bakery/shop; the person is who it is for. */}
+            <p className="mt-1 font-bold uppercase">{billCustomerDisplayName(bill, 'Walk-in Customer')}</p>
+            {billCustomerContactName(bill) && (
+              <p className="mt-0.5">Attn: {billCustomerContactName(bill)}</p>
+            )}
             <p className="mt-0.5 whitespace-pre-line">{bill.customer_address || '-'}</p>
             <p className="mt-0.5">GSTIN/UIN: {bill.customer_gstin || '-'}</p>
             <p>State: {customerState.name} ({customerState.code})</p>
@@ -374,7 +391,7 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
   }
 
   return (
-    <div className="mx-auto w-[80mm] bg-white p-3 font-mono text-[11px] text-black">
+    <div className="receipt-paper mx-auto w-[80mm] bg-white p-3 font-mono text-[11px] text-black">
       <div className="text-center">
         <h1 className="text-[14px] font-bold uppercase">{settings.shop_name}</h1>
         <p className="mt-0.5 text-[10px]">{settings.shop_phone}</p>
@@ -387,7 +404,7 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
           <span>{formatDateTimeCompactInIST(bill.created_at)}</span>
         </div>
         <div className="flex justify-between">
-          <span>{bill.customer_name || 'Walk-in'}</span>
+          <span>{billCustomerDisplayName(bill)}</span>
           <span className="uppercase">{bill.payment_method}</span>
         </div>
       </div>
@@ -429,9 +446,15 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
             <span>-{formatMoney(bill.discount_amount)}</span>
           </div>
         )}
+        {roundOff !== 0 && (
+          <div className="flex justify-between">
+            <span>Round Off</span>
+            <span>{formatMoney(roundOff)}</span>
+          </div>
+        )}
         <div className="mt-1 border-t border-black pt-1 flex justify-between text-[12px] font-bold">
           <span>Total</span>
-          <span>{formatMoney(bill.total_amount)}</span>
+          <span>{formatMoney(roundedTotal)}</span>
         </div>
       </div>
     </div>

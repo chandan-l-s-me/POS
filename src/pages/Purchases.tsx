@@ -97,7 +97,7 @@ function getLatestUnitCostForSupplierItem(
 }
 
 export const Purchases = () => {
-  const { items, setItems } = useDataStore();
+  const { items, refreshItems } = useDataStore();
   const formRef = useRef<HTMLFormElement | null>(null);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [purchaseRows, setPurchaseRows] = useState<PurchaseReportRow[]>([]);
@@ -264,11 +264,10 @@ export const Purchases = () => {
         igst_rate: newItemForm.gst_applicable ? (gstMode === 'igst' ? gstRate : 0) : 0,
       };
       const result = await api.addItem(normalizedItem);
-      const latestItems = await api.getItems();
-      setItems(latestItems);
+      await refreshItems();
       setShowCreateItemModal(false);
 
-      const createdItem = latestItems.find((item: Item) => item.id === result.id);
+      const createdItem = useDataStore.getState().items.find((item: Item) => item.id === result.id);
       if (createdItem) {
         selectItem(createItemRowIndex, createdItem.id);
       }
@@ -374,10 +373,13 @@ export const Purchases = () => {
         total_amount: totals.total,
       });
 
-      const [latestPurchases, latestPurchaseRows, latestItems, latestSuppliers] = await Promise.all([
+      const [latestPurchases, latestPurchaseRows, , latestSuppliers] = await Promise.all([
         api.getPurchases(),
         api.getPurchaseItemReport(),
-        api.getItems(),
+        // A purchase changes stock, so the shared catalogue cache is stale.
+        // Refresh it the one supported way rather than with a bare
+        // `api.getItems()`, which returns only the server's default 100 rows.
+        refreshItems(),
         api.getSuppliers(),
       ]);
 
@@ -387,7 +389,6 @@ export const Purchases = () => {
 
       setPurchases(latestPurchases);
       setPurchaseRows(latestPurchaseRows);
-      setItems(latestItems);
       setSuppliers(
         latestSuppliers.map((supplier: Supplier) => ({
           ...supplier,

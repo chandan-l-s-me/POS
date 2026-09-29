@@ -1,23 +1,28 @@
-import React, { useState, useMemo } from 'react';
-import { useDataStore } from '../store/useDataStore';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api';
-import { 
-  Search, 
-  Plus, 
-  Edit2, 
-  User, 
-  Phone, 
-  MapPin, 
+import {
+  Search,
+  Plus,
+  Edit2,
+  User,
+  Phone,
+  MapPin,
   X,
   Save,
-  CreditCard
+  BookOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Customer } from '../types';
 import { cn } from '../lib/utils';
+import { customerContactName, customerDisplayName, customerInitial } from '../lib/customer';
 
 export const Customers = () => {
-  const { customers, addCustomer, updateCustomer } = useDataStore();
+  // Local rows, for the same reason as the Items screen: this page loads one
+  // 50-row page at a time, and writing that into the shared store replaced the
+  // customer list the billing screen's picker reads.
+  const [rows, setRows] = useState<Customer[]>([]);
+  const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
@@ -30,13 +35,30 @@ export const Customers = () => {
     credit_balance: 0
   });
 
-  const filteredCustomers = useMemo(() => {
-    return customers.filter(c => 
-      c.name.toLowerCase().includes(search.toLowerCase()) || 
-      c.phone.includes(search) ||
-      c.shop_name?.toLowerCase().includes(search.toLowerCase())
-    );
-  }, [customers, search]);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const PAGE_SIZE = 50;
+
+  useEffect(() => {
+    const handle = setTimeout(() => { setAppliedSearch(search.trim()); setPage(0); }, 300);
+    return () => clearTimeout(handle);
+  }, [search]);
+
+  // Search and paging in SQL, so a customer beyond the first page is still
+  // reachable instead of silently absent.
+  const reload = useCallback(() => {
+    return api.getCustomersPage({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, search: appliedSearch || undefined })
+      .then((res) => { setRows(res?.data ?? []); setTotal(res?.total ?? 0); setLoadError(''); })
+      .catch((err: any) => setLoadError(err?.message || 'Could not load customers.'));
+  }, [page, appliedSearch]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // The server already applied the search.
+  const filteredCustomers = rows;
 
   const handleOpenModal = (customer?: Customer) => {
     if (customer) {
@@ -58,15 +80,21 @@ export const Customers = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.shop_name?.trim() && !formData.name?.trim()) {
+      alert('Enter the bakery / shop name, or the customer’s name if they have no shop.');
+      return;
+    }
     try {
       if (editingCustomer) {
         await api.updateCustomer(editingCustomer.id, formData);
-        updateCustomer({ ...editingCustomer, ...formData } as Customer);
       } else {
-        const result = await api.addCustomer(formData);
-        addCustomer({ ...formData, id: result.id, created_at: new Date().toISOString() } as Customer);
+        await api.addCustomer(formData);
       }
       setShowModal(false);
+      // Re-read, so the row shows what the server stored — a cashier's attempt
+      // to set a credit balance, for instance, is ignored server-side and the
+      // list must not pretend otherwise.
+      await reload();
     } catch (err: any) {
       alert(err.message);
     }
@@ -81,7 +109,7 @@ export const Customers = () => {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search customers..."
+            placeholder="Search by bakery / shop, name or phone..."
             className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
           />
         </div>
@@ -94,6 +122,26 @@ export const Customers = () => {
         </button>
       </div>
 
+      {loadError && (
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-red-100 bg-red-50 px-6 py-4">
+          <p className="font-medium text-red-600">{loadError}</p>
+          <button
+            onClick={() => reload()}
+            className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-100"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!loadError && filteredCustomers.length === 0 && (
+        <div className="flex flex-col items-center justify-center gap-3 py-20 text-gray-400">
+          <User size={40} />
+          <p className="font-medium">No customers found</p>
+          <p className="text-sm">{search ? 'Try searching for something else' : 'Customers will appear here once added'}</p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredCustomers.map(customer => (
           <motion.div
@@ -103,7 +151,7 @@ export const Customers = () => {
           >
             <div className="flex justify-between items-start mb-6">
               <div className="w-14 h-14 bg-orange-100 text-orange-600 rounded-2xl flex items-center justify-center font-bold text-xl">
-                {customer.name[0].toUpperCase()}
+                {customerInitial(customer)}
               </div>
               <button 
                 onClick={() => handleOpenModal(customer)}
@@ -113,9 +161,19 @@ export const Customers = () => {
               </button>
             </div>
 
-            <h4 className="font-bold text-xl text-gray-900 mb-1">{customer.name}</h4>
-            {customer.shop_name && (
-              <p className="text-sm font-semibold text-orange-600 mb-4">{customer.shop_name}</p>
+            {/* The bakery/shop is how this shop knows the customer, so it is
+                the heading; the person's name is who to ask for. A customer
+                with no shop is headed by their own name. */}
+            <h4 className="font-bold text-xl text-gray-900 mb-1">
+              <Link to={`/customers/${customer.id}`} className="hover:underline">
+                {customerDisplayName(customer)}
+              </Link>
+            </h4>
+            {customerContactName(customer) && (
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-orange-600 mb-4">
+                <User size={14} />
+                {customerContactName(customer)}
+              </p>
             )}
 
             <div className="space-y-3 mb-6">
@@ -147,13 +205,47 @@ export const Customers = () => {
                   ₹{customer.credit_balance.toFixed(2)}
                 </p>
               </div>
-              <button className="p-2 text-gray-400 hover:text-orange-600 transition-all">
-                <CreditCard size={20} />
-              </button>
+              <Link
+                to={`/customers/${customer.id}`}
+                className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:bg-gray-100"
+                title="Every bill, payment and balance change for this customer"
+              >
+                <BookOpen size={16} />
+                Passbook
+              </Link>
             </div>
           </motion.div>
         ))}
       </div>
+
+      {/* Paging. `total` is a COUNT from the same query, so this reflects the
+          whole table, not just what happens to be cached. */}
+      {total > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-100 bg-white px-6 py-4">
+          <p className="text-sm text-gray-500">
+            Showing {page * PAGE_SIZE + 1}&ndash;{Math.min((page + 1) * PAGE_SIZE, total)} of {total.toLocaleString('en-IN')}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((current) => Math.max(0, current - 1))}
+              disabled={page === 0}
+              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              Previous
+            </button>
+            <span className="px-2 text-sm font-semibold text-gray-500">
+              Page {page + 1} of {pageCount.toLocaleString('en-IN')}
+            </span>
+            <button
+              onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
+              disabled={page >= pageCount - 1}
+              className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Customer Modal */}
       <AnimatePresence>
@@ -175,17 +267,33 @@ export const Customers = () => {
 
                 <div className="p-8 space-y-6">
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">Customer Name</label>
+                    <label className="text-sm font-bold text-gray-700">Bakery / Shop Name</label>
                     <input
                       type="text"
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      value={formData.shop_name || ''}
+                      onChange={(e) => setFormData({ ...formData, shop_name: e.target.value })}
+                      placeholder="e.g. Sri Ganesh Bakery"
                       className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
-                      required
                     />
+                    <p className="text-xs text-gray-500">Leave blank if the customer has no bakery or shop.</p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-6">
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-gray-700">
+                        Customer / Contact Name
+                        {formData.shop_name?.trim() ? (
+                          <span className="ml-1 font-normal text-gray-400">(optional)</span>
+                        ) : null}
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.name || ''}
+                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                        placeholder={formData.shop_name?.trim() ? 'Who to ask for' : 'Required if no bakery / shop'}
+                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                      />
+                    </div>
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-gray-700">Phone Number</label>
                       <input
@@ -194,15 +302,6 @@ export const Customers = () => {
                         onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                         className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                         required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-gray-700">Shop Name</label>
-                      <input
-                        type="text"
-                        value={formData.shop_name}
-                        onChange={(e) => setFormData({ ...formData, shop_name: e.target.value })}
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                       />
                     </div>
                   </div>
