@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useDataStore } from '../store/useDataStore';
-import { useCartStore } from '../store/useCartStore';
+import { addItemToCart } from '../lib/cartActions';
 
 /**
  * Barcode/HSN scanner capture.
@@ -36,7 +36,6 @@ const isTypingTarget = (target: EventTarget | null) => {
 
 export const useHsnScanner = () => {
   const items = useDataStore((state) => state.items);
-  const addItem = useCartStore((state) => state.addItem);
   const location = useLocation();
   const hsnBuffer = useRef<string>('');
   const lastKeyTime = useRef<number>(0);
@@ -75,7 +74,8 @@ export const useHsnScanner = () => {
         hsnBuffer.current = '';
         if (code.length >= MIN_CODE_LENGTH) {
           const item = items.find((i) => i.hsn_code === code);
-          if (item) addItem(item);
+          // Priced from its batches; refused with a message if out of stock.
+          if (item) void addItemToCart(item);
         }
       } else if (e.key.length === 1) {
         hsnBuffer.current += e.key;
@@ -86,5 +86,5 @@ export const useHsnScanner = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [items, addItem, active]);
+  }, [items, active]);
 };

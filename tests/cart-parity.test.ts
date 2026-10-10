@@ -12,49 +12,51 @@
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { ADMIN_PASSWORD, client, startServer, type Client, type TestServer } from './helpers.ts';
+import { ADMIN_PASSWORD, addStock, client, makeStockedItem, startServer, type Client, type TestServer } from './helpers.ts';
 import { useCartStore } from '../src/store/useCartStore.ts';
 import type { Item } from '../src/types.ts';
 
 let server: TestServer;
 let admin: Client;
 
+/** An item that sells at `price` with plenty in stock, via the real API. */
 const makeItem = async (overrides: Partial<Item> & Record<string, unknown> = {}): Promise<Item> => {
-  const body = {
-    name: `Item ${Math.random().toString(36).slice(2, 10)}`,
-    hsn_code: String(Math.floor(Math.random() * 1e8)).padStart(8, '0'),
-    price: 100,
-    metric: 'piece',
-    is_loose: false,
-    gst_applicable: true,
-    gst_mode: 'split' as const,
-    gst_rate: 18,
-    sgst_rate: 9,
-    cgst_rate: 9,
-    igst_rate: 0,
-    stock_quantity: 100000,
-    ...overrides,
-  };
-  const res = await admin.post('/api/items', body);
-  assert.equal(res.status, 200, JSON.stringify(res.body));
-  return { id: res.body.id, created_at: '', ...body } as Item;
+  const created = await makeStockedItem(admin, { stock_quantity: 100000, ...overrides });
+  return { created_at: '', ...created } as unknown as Item;
 };
 
-/** Load a cart the way the UI does, and return what the screen would show. */
-const ringUp = (lines: Array<{ item: Item; quantity: number }>, discount = 0) => {
+/** The item's batches as the till reads them when the item goes into the cart. */
+const batchesFor = async (itemId: number) => {
+  const res = await admin.get(`/api/items/${itemId}/batches`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  return res.body.data.map((b: any) => ({ id: b.id, quantity_remaining: b.quantity_remaining, selling_price: b.selling_price }));
+};
+
+/**
+ * Load a cart the way the UI does — add the item with its batches, then set
+ * the quantity — and return what the screen would show.
+ */
+const ringUp = async (lines: Array<{ item: Item; quantity: number }>, discount = 0) => {
   const store = useCartStore.getState();
   store.clearCart();
   for (const { item, quantity } of lines) {
-    // The UI adds the item then sets the quantity, so mirror that.
-    useCartStore.getState().addItem(item, 1);
+    useCartStore.getState().addItem(item, await batchesFor(item.id), 1);
     if (quantity !== 1) useCartStore.getState().updateQuantity(item.id, quantity);
   }
   if (discount) useCartStore.getState().setDiscount(discount);
 
   const state = useCartStore.getState();
-  const cart = state.carts.find((c) => c.id === state.activeCartId)!;
-  return cart;
+  return state.carts.find((c) => c.id === state.activeCartId)!;
 };
+
+/** Post the cart exactly as Billing does: items and quantities, never prices. */
+const postCart = (cart: Awaited<ReturnType<typeof ringUp>>) =>
+  admin.post('/api/bills', {
+    items: cart.items.map((line) => ({ id: line.id, quantity: line.quantity })),
+    payment_method: 'cash',
+    discount_amount: cart.discount,
+    expected_total: cart.totals.total,
+  });
 
 before(async () => {
   server = await startServer();
@@ -63,6 +65,25 @@ before(async () => {
 });
 
 after(async () => { await server?.stop(); });
+
+describe('FIFO pricing on the till matches the ledger', () => {
+  it('agrees on a line that runs from an old batch into a dearer one', async () => {
+    const item = await makeItem({ price: 107.1, stock_quantity: 4, gst_rate: 5, sgst_rate: 2.5, cgst_rate: 2.5 });
+    await addStock(admin, item.id, { quantity: 10, selling_price: 113.4 });
+
+    const cart = await ringUp([{ item, quantity: 7 }]);
+    const line = cart.items[0];
+    assert.deepEqual(line.segments.map((s) => [s.quantity, s.unit_price]), [[4, 107.1], [3, 113.4]], 'the till shows the split');
+
+    const created = await postCart(cart);
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    const bill = (await admin.get(`/api/bills/${created.body.bill_id}`)).body;
+    assert.equal(bill.total_amount, cart.totals.total);
+    assert.equal(bill.tax_amount, cart.totals.tax);
+    assert.equal(bill.subtotal_amount, cart.totals.subtotal);
+    assert.deepEqual(bill.items.map((l: any) => [l.quantity, l.unit_price]), [[4, 107.1], [3, 113.4]]);
+  });
+});
 
 describe('what the till shows is what the ledger records', () => {
   const cases: Array<{ name: string; build: () => Promise<Array<{ item: Item; quantity: number }>>; discount?: number }> = [
@@ -121,7 +142,7 @@ describe('what the till shows is what the ledger records', () => {
   for (const testCase of cases) {
     it(`agrees on ${testCase.name}`, async () => {
       const lines = await testCase.build();
-      const cart = ringUp(lines, testCase.discount ?? 0);
+      const cart = await ringUp(lines, testCase.discount ?? 0);
 
       const created = await admin.post('/api/bills', {
         items: cart.items.map((line) => ({ id: line.id, quantity: line.quantity })),
@@ -172,7 +193,7 @@ describe('what the till shows is what the ledger records', () => {
     const mismatches: string[] = [];
     for (const { item } of built) {
       for (const quantity of quantities) {
-        const cart = ringUp([{ item, quantity }]);
+        const cart = await ringUp([{ item, quantity }]);
         const created = await admin.post('/api/bills', {
           items: [{ id: item.id, quantity }],
           payment_method: 'cash',

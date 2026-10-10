@@ -165,8 +165,14 @@ if ((existingBills > 0 || existingItems > 0) && !RESET) {
 
 const seed = db.transaction(() => {
   if (RESET) {
-    // Child rows first — foreign keys are enforced.
-    for (const table of ['bill_items', 'purchase_items', 'bills', 'purchases', 'audit_logs', 'items', 'customers', 'suppliers', 'document_counters']) {
+    // Child rows first — foreign keys are enforced. Stock batches and the
+    // credit ledger hang off bills, purchases, items and customers, so they go
+    // before any of those. Both are rebuilt from the seeded history the next
+    // time the server starts (see seedStockBatches in db/index.ts).
+    for (const table of [
+      'bill_item_batches', 'stock_adjustments', 'stock_batches', 'customer_credit_entries',
+      'bill_items', 'purchase_items', 'bills', 'purchases', 'audit_logs', 'items', 'customers', 'suppliers', 'document_counters',
+    ]) {
       db.prepare(`DELETE FROM ${table}`).run();
     }
     db.prepare("DELETE FROM sqlite_sequence WHERE name NOT IN ('users')").run();

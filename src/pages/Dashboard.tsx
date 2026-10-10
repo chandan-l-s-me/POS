@@ -9,9 +9,11 @@ import {
   ShoppingCart,
   ArrowUpRight,
   ArrowDownRight,
-  Calendar
+  Calendar,
+  Wallet,
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { Link } from 'react-router-dom';
 import { 
   AreaChart, 
   Area, 
@@ -119,6 +121,17 @@ export const Dashboard = () => {
       iconColor: "text-white",
       note: `${Number(data.todayBillCount || 0).toLocaleString('en-IN')} today`,
     },
+    {
+      label: "Owed to Suppliers",
+      value: formatMoney(data.supplierDue),
+      icon: Wallet,
+      color: "from-[#e164b5] to-[#f08a5d]",
+      iconColor: "text-white",
+      note: Number(data.supplierDueCount || 0) > 0
+        ? `${Number(data.supplierDueCount).toLocaleString('en-IN')} supplier${Number(data.supplierDueCount) === 1 ? '' : 's'}`
+        : 'All paid',
+      to: '/purchase-credit',
+    },
   ];
 
   return (
@@ -151,7 +164,7 @@ export const Dashboard = () => {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5 gap-6">
         {stats.map((stat, i) => (
           <motion.div
             key={stat.label}
@@ -170,7 +183,11 @@ export const Dashboard = () => {
             </div>
             <div>
               <p className="text-sm font-bold text-gray-400 uppercase tracking-wider">{stat.label}</p>
-              <p className="text-2xl font-black text-gray-900 mt-1">{stat.value}</p>
+              {'to' in stat && stat.to ? (
+                <Link to={stat.to} className="block text-2xl font-black text-gray-900 mt-1 hover:underline">{stat.value}</Link>
+              ) : (
+                <p className="text-2xl font-black text-gray-900 mt-1">{stat.value}</p>
+              )}
             </div>
           </motion.div>
         ))}

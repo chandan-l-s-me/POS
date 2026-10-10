@@ -1,5 +1,10 @@
 import { create } from 'zustand';
-import { Item, CartItem, Customer } from '../types';
+import { Item, CartItem, CartSegment, Customer } from '../types';
+// The same allocation and arithmetic the server runs when the bill is saved,
+// so the figure on the till is the figure in the ledger.
+import { allocateFifo, computeLine, priceSegments, round2, round3, type Allocation } from '../lib/billMath';
+
+type CartBatch = CartItem['batches'][number];
 
 type PaymentMethod = 'cash' | 'upi' | 'credit' | 'split';
 
@@ -33,9 +38,12 @@ interface CartState {
   setActiveCart: (cartId: string) => void;
   setCartName: (cartId: string, name: string) => void;
   closeBillingTab: (cartId: string) => void;
-  addItem: (item: Item, quantity?: number) => void;
+  /** Add `quantity` of an item, priced from its batches (oldest first). */
+  addItem: (item: Item, batches: CartBatch[], quantity?: number) => void;
   removeItem: (itemId: number) => void;
   updateQuantity: (itemId: number, quantity: number) => void;
+  /** Re-price a line from a fresh read of the item's batches. */
+  setItemBatches: (itemId: number, batches: CartBatch[]) => void;
   setCustomer: (customer: Customer | null) => void;
   setDiscount: (discount: number) => void;
   setPaymentMethod: (method: PaymentMethod) => void;
@@ -43,9 +51,60 @@ interface CartState {
   clearCart: () => void;
 }
 
-// Round to 2 decimal places, guarding against binary floating-point drift
-// (e.g. 0.1 + 0.2) accumulating across tax splits and multi-item totals.
-const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+/**
+ * Price a cart line from the item's batches.
+ *
+ * Units are taken oldest batch first, each at its batch's selling price, so a
+ * line that runs out of last week's stock becomes two segments: the rest of
+ * last week's at last week's price, then this week's at this week's. The till
+ * cannot change these prices. This is exactly what server.ts does when the
+ * bill is saved — the allocation and the arithmetic are the same shared code.
+ */
+const buildCartLine = (item: Item, batches: CartBatch[], quantity: number): CartItem => {
+  const qty = round3(Math.max(0, quantity));
+  const available = round3(batches.reduce((acc, batch) => acc + batch.quantity_remaining, 0));
+  const defaultPrice = batches[0]?.selling_price ?? item.price;
+
+  const { allocations, shortfall } = allocateFifo(batches, qty);
+  // Units beyond what is in stock are priced like the newest stock, so the
+  // total stays sensible while the line flags the shortage. The server will
+  // not save the bill until the quantity fits.
+  const priced: Allocation[] = shortfall > 0
+    ? [...allocations, { batch_id: 0, quantity: shortfall, selling_price: batches[batches.length - 1]?.selling_price ?? item.price }]
+    : allocations;
+
+  const segments: CartSegment[] = priceSegments(priced).map((segment) => {
+    const line = computeLine(item, segment.unit_price, segment.quantity);
+    return {
+      quantity: line.quantity,
+      unit_price: line.unit_price,
+      total_amount: line.total_amount,
+      taxable_amount: line.taxable_amount,
+      sgst_amount: line.sgst_amount,
+      cgst_amount: line.cgst_amount,
+      igst_amount: line.igst_amount,
+    };
+  });
+  const sum = (key: keyof CartSegment) => round2(segments.reduce((acc, segment) => acc + segment[key], 0));
+
+  return {
+    ...item,
+    quantity: qty,
+    batches,
+    available,
+    unit_price: segments[0]?.unit_price ?? defaultPrice,
+    segments,
+    sgst_amount: sum('sgst_amount'),
+    cgst_amount: sum('cgst_amount'),
+    igst_amount: sum('igst_amount'),
+    total_amount: sum('total_amount'),
+    taxable_amount: sum('taxable_amount'),
+  };
+};
+
+/** Rebuild a line after one of its inputs changed. */
+const rebuild = (line: CartItem, changes: { batches?: CartBatch[]; quantity?: number }) =>
+  buildCartLine(line, changes.batches ?? line.batches, changes.quantity ?? line.quantity);
 
 const createEmptyCart = (index: number): BillingCart => ({
   id: `bill-tab-${Date.now()}-${index}`,
@@ -108,63 +167,6 @@ const updateActiveCart = (
 export const useCartStore = create<CartState>((set, get) => {
   const initialCart = createEmptyCart(1);
 
-  const getTaxBreakdown = (item: Item, totalUnit: number) => {
-    if (!item.gst_applicable) {
-      return { sgstUnit: 0, cgstUnit: 0, igstUnit: 0, basePriceUnit: totalUnit };
-    }
-
-    const itemMode = item.gst_mode || (item.igst_rate ? 'igst' : 'split');
-    if (itemMode === 'igst') {
-      const igstUnit = (totalUnit * (item.igst_rate || item.gst_rate || 0)) / 100;
-      return {
-        sgstUnit: 0,
-        cgstUnit: 0,
-        igstUnit,
-        basePriceUnit: totalUnit - igstUnit,
-      };
-    }
-
-    const sgstUnit = (totalUnit * item.sgst_rate) / 100;
-    const cgstUnit = (totalUnit * item.cgst_rate) / 100;
-    return {
-      sgstUnit,
-      cgstUnit,
-      igstUnit: 0,
-      basePriceUnit: totalUnit - sgstUnit - cgstUnit,
-    };
-  };
-
-  /**
-   * Build a cart line. This mirrors the recomputation in server.ts field for
-   * field, including the order of the roundings, so the till and the ledger
-   * cannot disagree. Change one and you must change the other.
-   */
-  const buildLine = (item: Item, totalUnit: number, quantity: number) => {
-    const { sgstUnit, cgstUnit, igstUnit } = getTaxBreakdown(item, totalUnit);
-
-    const sgst_amount = round2(sgstUnit * quantity);
-    const cgst_amount = round2(cgstUnit * quantity);
-    const igst_amount = round2(igstUnit * quantity);
-    const total_amount = round2(totalUnit * quantity);
-    // Derive the taxable value by subtracting the already-rounded taxes from
-    // the already-rounded line total, so that for every line
-    //     taxable + tax === total
-    // holds exactly and the invoice reconciles.
-    const taxable_amount = round2(total_amount - sgst_amount - cgst_amount - igst_amount);
-
-    return {
-      quantity,
-      sgst_amount,
-      cgst_amount,
-      igst_amount,
-      total_amount,
-      taxable_amount,
-      // Unit rate consistent with the line taxable value above; this is the
-      // figure the server stores in bill_items.price.
-      price: quantity > 0 ? round2(taxable_amount / quantity) : 0,
-    };
-  };
-
   return {
     carts: [initialCart],
     activeCartId: initialCart.id,
@@ -215,34 +217,22 @@ export const useCartStore = create<CartState>((set, get) => {
         };
       }),
 
-    addItem: (item, quantity = 1) =>
+    addItem: (item, batches, quantity = 1) =>
       set((state) => ({
         carts: updateActiveCart(state.carts, state.activeCartId, (cart) => {
-          const existingItem = cart.items.find((cartItem) => cartItem.id === item.id);
-
-          if (existingItem) {
-            const updatedItems = cart.items.map((cartItem) => {
-              if (cartItem.id !== item.id) return cartItem;
-              const nextQuantity = cartItem.quantity + quantity;
-              return { ...cartItem, ...buildLine(cartItem, cartItem.original_price, nextQuantity) };
-            });
-
-            return { ...cart, items: updatedItems };
+          const existing = cart.items.find((cartItem) => cartItem.id === item.id);
+          if (existing) {
+            // Same item again: more of it, priced from the fresh batch read.
+            return {
+              ...cart,
+              items: cart.items.map((cartItem) =>
+                cartItem.id === item.id
+                  ? rebuild(cartItem, { batches, quantity: cartItem.quantity + quantity })
+                  : cartItem
+              ),
+            };
           }
-
-          const totalUnit = item.price;
-
-          return {
-            ...cart,
-            items: [
-              ...cart.items,
-              {
-                ...item,
-                ...buildLine(item, totalUnit, quantity),
-                original_price: totalUnit,
-              },
-            ],
-          };
+          return { ...cart, items: [...cart.items, buildCartLine(item, batches, quantity)] };
         }),
       })),
 
@@ -258,10 +248,22 @@ export const useCartStore = create<CartState>((set, get) => {
       set((state) => ({
         carts: updateActiveCart(state.carts, state.activeCartId, (cart) => ({
           ...cart,
-          items: cart.items.map((item) =>
-            item.id === itemId ? { ...item, ...buildLine(item, item.original_price, quantity) } : item
-          ),
+          items: cart.items.map((item) => (item.id === itemId ? rebuild(item, { quantity }) : item)),
         })),
+      })),
+
+    setItemBatches: (itemId, batches) =>
+      set((state) => ({
+        // Every open bill tab holding this item, not just the active one: a
+        // refresh means the stock moved, wherever the item is waiting.
+        carts: state.carts.map((cart) =>
+          cart.items.some((item) => item.id === itemId)
+            ? recalculateCart({
+                ...cart,
+                items: cart.items.map((item) => (item.id === itemId ? rebuild(item, { batches }) : item)),
+              })
+            : cart
+        ),
       })),
 
     setCustomer: (customer) =>

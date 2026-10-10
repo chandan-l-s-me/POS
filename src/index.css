@@ -463,6 +463,19 @@ input, select, textarea {
 }
 input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 
+/* No up/down spinner arrows on number boxes, anywhere in the app. On a till
+   they are too small to tap, crowd the digits in narrow cells, and a stray
+   click nudges a quantity or price by one. Values are typed. */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 html.dark input[type="date"]::-webkit-calendar-picker-indicator,
 html.dark input[type="time"]::-webkit-calendar-picker-indicator {
   filter: invert(0.85);

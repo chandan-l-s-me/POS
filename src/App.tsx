@@ -13,6 +13,10 @@ import { CustomerPassbook } from './pages/CustomerPassbook';
 import { Suppliers } from './pages/Suppliers';
 import { History } from './pages/History';
 import { Purchases } from './pages/Purchases';
+import { PurchaseCredit } from './pages/PurchaseCredit';
+import { SalesCredit } from './pages/SalesCredit';
+import { Stock } from './pages/Stock';
+import { PaymentsDone } from './pages/PaymentsDone';
 import { Reports } from './pages/Reports';
 import { Dashboard } from './pages/Dashboard';
 import { Settings } from './pages/Settings';
@@ -90,6 +94,30 @@ const AppRoutes = () => {
       <Route path="/purchases" element={
         <ProtectedRoute roles={['admin']}>
           <Purchases />
+        </ProtectedRoute>
+      } />
+
+      <Route path="/stock" element={
+        <ProtectedRoute>
+          <Stock />
+        </ProtectedRoute>
+      } />
+
+      <Route path="/sales-credit" element={
+        <ProtectedRoute>
+          <SalesCredit />
+        </ProtectedRoute>
+      } />
+
+      <Route path="/purchase-credit" element={
+        <ProtectedRoute roles={['admin']}>
+          <PurchaseCredit />
+        </ProtectedRoute>
+      } />
+
+      <Route path="/payments-done" element={
+        <ProtectedRoute roles={['admin']}>
+          <PaymentsDone />
         </ProtectedRoute>
       } />
 

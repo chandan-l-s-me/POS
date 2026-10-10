@@ -1,4 +1,7 @@
-node_modules/
+# node_modules is a link to node_modules.nosync, which iCloud Drive does not
+# sync or offload (offloaded files made the build time out).
+node_modules
+node_modules.nosync/
 build/
 dist/
 coverage/

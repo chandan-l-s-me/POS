@@ -135,9 +135,10 @@ describe('role enforcement', () => {
   }
 
   it('forbids a cashier from creating items', async () => {
-    const res = await cashier.post('/api/items', {
-      name: 'Contraband', hsn_code: '1234', price: 10, metric: 'piece',
-      gst_applicable: 0, gst_rate: 0, sgst_rate: 0, cgst_rate: 0, igst_rate: 0, stock_quantity: 5,
+    // Items are created only by purchases, and purchases are admin-only.
+    const res = await cashier.post('/api/purchases', {
+      supplier_name: 'Anyone',
+      items: [{ new_item: { name: 'Contraband', hsn_code: '1234', metric: 'piece' }, quantity: 5, unit_cost: 10, selling_price: 15 }],
     });
     assert.equal(res.status, 403);
   });

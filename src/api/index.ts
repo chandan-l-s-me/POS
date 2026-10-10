@@ -29,6 +29,11 @@ const buildQuery = (params?: ListQuery) => {
  */
 const unwrap = (response: any) => (Array.isArray(response) ? response : response?.data ?? []);
 
+export interface ApiError extends Error {
+  status?: number;
+  code?: string;
+}
+
 async function fetchWithAuth(url: string, options: RequestInit = {}) {
   const token = useAuthStore.getState().token;
   const headers = {
@@ -53,7 +58,12 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
     if (response.status === 401) {
       useAuthStore.getState().logout();
     }
-    throw new Error(data?.error || `Request failed with status ${response.status}`);
+    // Carry the status and the server's reason code, so a caller can tell
+    // "prices changed, refresh" (409 PRICE_CHANGED) from a plain failure.
+    const error = new Error(data?.error || `Request failed with status ${response.status}`) as ApiError;
+    error.status = response.status;
+    error.code = data?.code;
+    throw error;
   }
 
   return data;
@@ -76,9 +86,17 @@ export const api = {
   // the Items admin screen asks for the full row (including image_url).
   getItems: (params?: ListQuery) => fetchWithAuth(`/items${buildQuery(params)}`).then(unwrap),
   getItemsPage: (params?: ListQuery) => fetchWithAuth(`/items${buildQuery(params)}`),
-  addItem: (item: any) => fetchWithAuth('/items', { method: 'POST', body: JSON.stringify(item) }),
+  // No addItem: items are created only as new lines of a saved purchase.
   updateItem: (id: number, item: any) => fetchWithAuth(`/items/${id}`, { method: 'PUT', body: JSON.stringify(item) }),
   deleteItem: (id: number) => fetchWithAuth(`/items/${id}`, { method: 'DELETE' }),
+  /** An item's stock batch by batch, oldest (next to sell) first. */
+  getItemBatches: (id: number, options: { all?: boolean } = {}) =>
+    fetchWithAuth(`/items/${id}/batches${options.all ? '?all=1' : ''}`),
+  /** Add (quantity > 0) or remove (quantity < 0) stock, with a reason. */
+  adjustStock: (id: number, payload: { quantity: number; reason: string; unit_cost?: number; selling_price?: number }) =>
+    fetchWithAuth(`/items/${id}/stock-adjustments`, { method: 'POST', body: JSON.stringify(payload) }),
+  repriceBatch: (batchId: number, sellingPrice: number) =>
+    fetchWithAuth(`/stock-batches/${batchId}`, { method: 'PUT', body: JSON.stringify({ selling_price: sellingPrice }) }),
 
   getCustomers: (params?: ListQuery) => fetchWithAuth(`/customers${buildQuery(params)}`).then(unwrap),
   getCustomersPage: (params?: ListQuery) => fetchWithAuth(`/customers${buildQuery(params)}`),
@@ -92,6 +110,8 @@ export const api = {
   /** A customer's credit statement: every change to what they owe. */
   getCustomerCreditEntries: (id: number, params?: ListQuery) =>
     fetchWithAuth(`/customers/${id}/credit-entries${buildQuery(params)}`),
+  /** What customers owe: unpaid credit bills by customer, oldest first, with ageing. */
+  getSalesCredit: () => fetchWithAuth('/sales-credit'),
   recordCreditPayment: (id: number, payload: { amount: number; note?: string }) =>
     fetchWithAuth(`/customers/${id}/credit-payments`, { method: 'POST', body: JSON.stringify(payload) }),
 
@@ -103,16 +123,33 @@ export const api = {
   getBillsPage: (params?: ListQuery) => fetchWithAuth(`/bills${buildQuery(params)}`),
   getBill: (id: number) => fetchWithAuth(`/bills/${id}`),
   createBill: (bill: any) => fetchWithAuth('/bills', { method: 'POST', body: JSON.stringify(bill) }),
+  /** Delete a bill: its stock goes back to the batches it came from and its credit comes off the customer. Admin. */
+  deleteBill: (id: number) => fetchWithAuth(`/bills/${id}`, { method: 'DELETE' }),
 
   getPurchases: (params?: ListQuery) => fetchWithAuth(`/purchases${buildQuery(params)}`).then(unwrap),
   getPurchase: (id: number) => fetchWithAuth(`/purchases/${id}`),
   createPurchase: (purchase: any) => fetchWithAuth('/purchases', { method: 'POST', body: JSON.stringify(purchase) }),
+
+  /** Everything still owed to suppliers, by supplier, oldest invoice first. */
+  getPurchaseCredit: () => fetchWithAuth('/purchase-credit'),
+  /** Fully paid purchases; `from`/`to` bound the day they were cleared. */
+  getPaidPurchases: (params?: ListQuery) => fetchWithAuth(`/paid-purchases${buildQuery(params)}`),
+  getSupplierPayments: (params?: ListQuery & { supplier_id?: number }) =>
+    fetchWithAuth(`/supplier-payments${buildQuery(params as ListQuery)}`),
+  /** Pay a supplier: against one purchase, or their oldest unpaid purchases first. */
+  recordSupplierPayment: (payload: {
+    supplier_id?: number; purchase_id?: number; amount: number; paid_on?: string;
+    method?: string; reference?: string; note?: string;
+  }) => fetchWithAuth('/supplier-payments', { method: 'POST', body: JSON.stringify(payload) }),
+  deleteSupplierPayment: (id: number) => fetchWithAuth(`/supplier-payments/${id}`, { method: 'DELETE' }),
   getPurchaseItemReport: (params?: ListQuery) =>
     fetchWithAuth(`/reports/purchase-items${buildQuery(params)}`).then(unwrap),
   getSalesItemReport: (params?: ListQuery) =>
     fetchWithAuth(`/reports/sales-items${buildQuery(params)}`).then(unwrap),
 
   getAnalytics: () => fetchWithAuth('/analytics'),
+  /** Every item's stock: status against the low-stock threshold, value, rate of sale. */
+  getStock: () => fetchWithAuth('/stock'),
   getAuditLogs: (params?: ListQuery) => fetchWithAuth(`/audit-logs${buildQuery(params)}`).then(unwrap),
   getAuditLogsPage: (params?: ListQuery) => fetchWithAuth(`/audit-logs${buildQuery(params)}`),
   updateCashier: (id: number, payload: { is_active?: boolean; new_password?: string }) =>

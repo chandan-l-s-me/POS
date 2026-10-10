@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createRequire } from 'node:module';
-import { ADMIN_PASSWORD, client, round2, startServer, type Client, type TestServer } from './helpers.ts';
+import { ADMIN_PASSWORD, client, makeStockedItem, round2, startServer, type Client, type TestServer } from './helpers.ts';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3');
@@ -22,17 +22,11 @@ let admin: Client;
 let cashier: Client;
 let phoneSeed = 5000000000;
 
-const makeItem = async (price = 100) => {
-  const res = await admin.post('/api/items', {
-    name: `Item ${Math.random().toString(36).slice(2, 10)}`,
-    hsn_code: String(Math.floor(Math.random() * 1e8)).padStart(8, '0'),
-    price, metric: 'piece', is_loose: false,
-    gst_applicable: false, gst_mode: 'split', gst_rate: 0,
-    sgst_rate: 0, cgst_rate: 0, igst_rate: 0, stock_quantity: 100000,
-  });
-  assert.equal(res.status, 200, JSON.stringify(res.body));
-  return res.body.id as number;
-};
+const makeItem = async (price = 100) =>
+  (await makeStockedItem(admin, {
+    price, stock_quantity: 100000,
+    gst_applicable: false, gst_rate: 0, sgst_rate: 0, cgst_rate: 0, igst_rate: 0,
+  })).id;
 
 const makeCustomer = async (extra: Record<string, unknown> = {}) => {
   const res = await admin.post('/api/customers', {

@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { profitPercentFromSellingPrice, round3, saleGstRate } from '../src/lib/billMath';
 
 // Where the database lives. Overridable so a deployment can put the file on a
 // backed-up volume rather than inside the application directory, and so the
@@ -46,6 +47,12 @@ const ensureIndex = (indexName: string, statement: string) => {
 
 // Initialize schema
 export function initDb() {
+  // Whether purchase payments were already being tracked. If not, this start
+  // is the upgrade, and every purchase already on file is marked paid below.
+  const hadSupplierPayments = Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'supplier_payments'").get()
+  );
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,6 +221,108 @@ export function initDb() {
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
 
+    -- Stock, held in batches so it can be sold first-in first-out.
+    --
+    -- Each purchase line becomes a batch with its own cost and selling price.
+    -- Billing takes from the oldest batch that still has stock, at that
+    -- batch's price, so last week's yeast bought at 85 is sold (at last week's
+    -- price) before this week's at 90.
+    --
+    -- items.stock_quantity and items.price are kept as a cache of what these
+    -- rows say — total remaining, and the price of the batch that sells next —
+    -- and are only ever written by syncItemStock() in server.ts.
+    CREATE TABLE IF NOT EXISTS stock_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      -- 'purchase': a purchase line. 'adjustment': stock added by hand, with a
+      -- reason. 'opening': stock on hand when batch tracking was introduced
+      -- that the purchase history did not account for.
+      source TEXT NOT NULL CHECK(source IN ('purchase', 'adjustment', 'opening')),
+      purchase_id INTEGER,
+      purchase_item_id INTEGER,
+      -- FIFO order. When the stock arrived, not when the supplier invoiced it.
+      received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      quantity_received REAL NOT NULL,
+      quantity_remaining REAL NOT NULL CHECK(quantity_remaining >= 0),
+      -- Purchase cost per unit before GST. NULL where it is not known — stock
+      -- that predates the purchase records.
+      unit_cost REAL,
+      -- Selling price per unit, GST-inclusive like every price in the app.
+      selling_price REAL NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES items(id),
+      FOREIGN KEY (purchase_id) REFERENCES purchases(id),
+      FOREIGN KEY (purchase_item_id) REFERENCES purchase_items(id)
+    );
+
+    -- Which batches each bill line was taken from, and at what cost. A line
+    -- can span batches when the oldest runs out part-way through a sale.
+    CREATE TABLE IF NOT EXISTS bill_item_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_item_id INTEGER NOT NULL,
+      batch_id INTEGER NOT NULL,
+      quantity REAL NOT NULL,
+      unit_cost REAL,
+      FOREIGN KEY (bill_item_id) REFERENCES bill_items(id),
+      FOREIGN KEY (batch_id) REFERENCES stock_batches(id)
+    );
+
+    -- Stock changed by hand — damage, expiry, a recount, opening stock — with
+    -- the reason and who did it. Removals are taken oldest batch first, one
+    -- row per batch touched.
+    CREATE TABLE IF NOT EXISTS stock_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      batch_id INTEGER NOT NULL,
+      quantity REAL NOT NULL,
+      reason TEXT NOT NULL,
+      user_id INTEGER,
+      user_name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (item_id) REFERENCES items(id),
+      FOREIGN KEY (batch_id) REFERENCES stock_batches(id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    -- Money the shop has paid its suppliers.
+    --
+    -- A purchase is either paid at the time or bought on credit, and credit is
+    -- settled later, often in one payment covering several invoices. Each
+    -- payment is a row of its own, never an edited figure, so the auditor can
+    -- see when the money went, how much, how, and who entered it.
+    --
+    -- What a purchase still owes is its total less its allocations below;
+    -- nothing else stores it, so the two cannot drift apart.
+    CREATE TABLE IF NOT EXISTS supplier_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      supplier_id INTEGER NOT NULL,
+      amount REAL NOT NULL CHECK(amount > 0),
+      -- The day the money was handed over (YYYY-MM-DD, IST). Often entered
+      -- later, so it is asked for rather than taken from created_at.
+      paid_on TEXT NOT NULL,
+      -- Optional: the owner may not say how it was paid.
+      method TEXT CHECK(method IN ('cash', 'upi', 'bank', 'cheque')),
+      -- UTR, cheque number, receipt number.
+      reference TEXT,
+      note TEXT,
+      user_id INTEGER,
+      user_name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    -- Which purchases each payment settled, and how much of each. One payment
+    -- can clear several invoices, oldest first.
+    CREATE TABLE IF NOT EXISTS supplier_payment_allocations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      payment_id INTEGER NOT NULL,
+      purchase_id INTEGER NOT NULL,
+      amount REAL NOT NULL CHECK(amount > 0),
+      FOREIGN KEY (payment_id) REFERENCES supplier_payments(id),
+      FOREIGN KEY (purchase_id) REFERENCES purchases(id)
+    );
+
     CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -252,6 +361,26 @@ export function initDb() {
   ensureColumn('users', 'token_version', 'INTEGER NOT NULL DEFAULT 0');
   // Lets an admin disable a cashier without deleting their historical bills.
   ensureColumn('users', 'is_active', 'INTEGER NOT NULL DEFAULT 1');
+  // The profit margin used on this item's last purchase, offered again on the
+  // next one so the purchase screen does not start from a blank every time.
+  ensureColumn('items', 'default_profit_percent', 'REAL');
+  // The GST-inclusive price per unit actually charged on a bill line.
+  ensureColumn('bill_items', 'unit_price', 'REAL');
+  // Whether the cashier changed a line's price. Billing no longer allows that,
+  // so new lines are always 0; the column stays for lines already written.
+  ensureColumn('bill_items', 'price_overridden', 'INTEGER NOT NULL DEFAULT 0');
+  // What the stock on a purchase line was priced to sell at, and the profit
+  // margin that gives on its cost. Kept on the purchase itself so reports can
+  // show them; the purchase screen deliberately does not.
+  ensureColumn('purchase_items', 'selling_price', 'REAL');
+  ensureColumn('purchase_items', 'profit_percent', 'REAL');
+  db.exec(`UPDATE bill_items SET unit_price = ROUND(total_amount / quantity, 2) WHERE unit_price IS NULL AND quantity > 0`);
+  // Purchases named their supplier only as text, so renaming a supplier cut
+  // them off from their own purchases. What the shop owes is per supplier, so
+  // each purchase now points at its supplier row.
+  ensureColumn('purchases', 'supplier_id', 'INTEGER REFERENCES suppliers(id)');
+  linkPurchasesToSuppliers();
+  if (!hadSupplierPayments) markExistingPurchasesPaid();
 
   // Backfill the subtotal for bills written before the column existed, from
   // their own line items — the same derivation the receipt used to do at
@@ -365,6 +494,16 @@ export function initDb() {
   // ledger grows.
   ensureIndex('idx_credit_entries_customer', 'ON customer_credit_entries(customer_id, created_at DESC, id DESC)');
   ensureIndex('idx_credit_entries_bill', 'ON customer_credit_entries(bill_id)');
+  // Billing reads an item's batches in FIFO order on every line it rings up.
+  ensureIndex('idx_stock_batches_fifo', 'ON stock_batches(item_id, received_at, id)');
+  ensureIndex('idx_bill_item_batches_line', 'ON bill_item_batches(bill_item_id)');
+  ensureIndex('idx_bill_item_batches_batch', 'ON bill_item_batches(batch_id)');
+  ensureIndex('idx_stock_adjustments_item', 'ON stock_adjustments(item_id, created_at)');
+  ensureIndex('idx_purchases_supplier_id', 'ON purchases(supplier_id)');
+  ensureIndex('idx_supplier_payments_supplier', 'ON supplier_payments(supplier_id, paid_on)');
+  ensureIndex('idx_supplier_payments_paid_on', 'ON supplier_payments(paid_on)');
+  ensureIndex('idx_supplier_payment_allocations_purchase', 'ON supplier_payment_allocations(purchase_id)');
+  ensureIndex('idx_supplier_payment_allocations_payment', 'ON supplier_payment_allocations(payment_id)');
   // Expression index so the IST-day analytics queries can use an index
   // instead of recomputing date(datetime(...)) for every row in the table.
   ensureIndex(
@@ -456,6 +595,204 @@ export function initDb() {
     'THANK YOU FOR VISITING!',
     'Visit again soon'
   );
+
+  // Last, so items created above by SEED_DEMO_DATA get batches too.
+  seedStockBatches();
+  backfillPurchaseLinePricing();
+}
+
+/**
+ * Point every purchase at its supplier row, by name, creating the supplier if
+ * the purchase names one that is not on file. Only touches unlinked purchases,
+ * so it is a no-op once done.
+ */
+function linkPurchasesToSuppliers() {
+  const names = db.prepare(`
+    SELECT DISTINCT TRIM(supplier_name) AS name FROM purchases WHERE supplier_id IS NULL
+  `).all() as Array<{ name: string }>;
+  if (names.length === 0) return;
+
+  const find = db.prepare('SELECT id FROM suppliers WHERE lower(name) = lower(?)');
+  const create = db.prepare('INSERT INTO suppliers (name) VALUES (?)');
+  const link = db.prepare(`
+    UPDATE purchases SET supplier_id = ? WHERE supplier_id IS NULL AND lower(TRIM(supplier_name)) = lower(?)
+  `);
+  db.transaction(() => {
+    for (const { name } of names) {
+      const existing = find.get(name) as { id: number } | undefined;
+      const supplierId = existing?.id ?? Number(create.run(name).lastInsertRowid);
+      link.run(supplierId, name);
+    }
+  })();
+}
+
+/**
+ * Purchases from before payments were tracked count as paid — the owner's
+ * call when this was introduced. Each gets one payment, dated the day of the
+ * purchase, with no method, saying so. Runs once, on the upgrade.
+ */
+function markExistingPurchasesPaid() {
+  const purchases = db.prepare(`
+    SELECT id, supplier_id, total_amount, date(datetime(created_at, '+5 hours', '+30 minutes')) AS purchased_on
+    FROM purchases
+    WHERE total_amount > 0
+      AND NOT EXISTS (SELECT 1 FROM supplier_payment_allocations a WHERE a.purchase_id = purchases.id)
+  `).all() as Array<{ id: number; supplier_id: number; total_amount: number; purchased_on: string }>;
+  if (purchases.length === 0) return;
+
+  const insertPayment = db.prepare(`
+    INSERT INTO supplier_payments (supplier_id, amount, paid_on, method, note, user_id, user_name)
+    VALUES (?, ?, ?, NULL, 'Paid before purchase payments were tracked', NULL, 'System')
+  `);
+  const allocate = db.prepare('INSERT INTO supplier_payment_allocations (payment_id, purchase_id, amount) VALUES (?, ?, ?)');
+  db.transaction(() => {
+    for (const purchase of purchases) {
+      const payment = insertPayment.run(purchase.supplier_id, purchase.total_amount, purchase.purchased_on);
+      allocate.run(Number(payment.lastInsertRowid), purchase.id, purchase.total_amount);
+    }
+  })();
+}
+
+/**
+ * Fill in selling price and profit % on purchase lines saved before those were
+ * recorded, from the batch each line created. Only touches lines missing them,
+ * so it is a no-op once done. For lines from before stock batches existed, the
+ * batch carries the item's price at upgrade time, so that is what they get.
+ */
+function backfillPurchaseLinePricing() {
+  const lines = db.prepare(`
+    SELECT pi.id, pi.unit_cost, b.selling_price,
+           i.gst_applicable, i.gst_mode, i.gst_rate, i.sgst_rate, i.cgst_rate, i.igst_rate
+    FROM purchase_items pi
+    JOIN stock_batches b ON b.purchase_item_id = pi.id
+    JOIN items i ON i.id = pi.item_id
+    WHERE pi.selling_price IS NULL
+  `).all() as any[];
+  if (lines.length === 0) return;
+
+  const update = db.prepare('UPDATE purchase_items SET selling_price = ?, profit_percent = ? WHERE id = ?');
+  db.transaction(() => {
+    for (const line of lines) {
+      update.run(line.selling_price, profitPercentFromSellingPrice(line.unit_cost, line.selling_price, saleGstRate(line)), line.id);
+    }
+  })();
+}
+
+/**
+ * Build stock batches for a database that predates them. Runs once: only when
+ * the table is empty.
+ *
+ * Each item's current stock is assigned to its purchase lines newest first,
+ * because under FIFO the stock still on the shelf is what was bought most
+ * recently. So with 150 in stock after buying 100 @ 80 and then 120 @ 85, the
+ * batches come out as 30 left @ 80 and 120 left @ 85 — the real cost of what
+ * is left. Stock the purchases do not account for (opening stock, edits made
+ * by hand) becomes one 'opening' batch with an unknown cost, placed oldest so
+ * it sells first.
+ *
+ * Every batch takes the item's current selling price. There was only ever one
+ * price per item before this, and changing what the counter charges as a side
+ * effect of an upgrade would be a nasty surprise.
+ */
+function seedStockBatches() {
+  const existing = db.prepare('SELECT COUNT(*) AS c FROM stock_batches').get() as { c: number };
+  if (existing.c > 0) return;
+
+  const seed = db.transaction(() => {
+    const items = db.prepare(`
+      SELECT id, price, stock_quantity, created_at, gst_applicable, gst_mode, gst_rate, sgst_rate, cgst_rate, igst_rate
+      FROM items
+    `).all() as any[];
+    const lines = db.prepare(`
+      SELECT pi.id, pi.purchase_id, pi.item_id, pi.quantity, pi.unit_cost, p.created_at
+      FROM purchase_items pi
+      JOIN purchases p ON p.id = pi.purchase_id
+      ORDER BY p.created_at DESC, pi.id DESC
+    `).all() as any[];
+
+    const linesByItem = new Map<number, any[]>();
+    for (const line of lines) {
+      const list = linesByItem.get(line.item_id) ?? [];
+      list.push(line);
+      linesByItem.set(line.item_id, list);
+    }
+
+    const insertBatch = db.prepare(`
+      INSERT INTO stock_batches
+        (item_id, source, purchase_id, purchase_item_id, received_at, quantity_received, quantity_remaining, unit_cost, selling_price)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const setMargin = db.prepare('UPDATE items SET default_profit_percent = ? WHERE id = ?');
+
+    for (const item of items) {
+      const itemLines = linesByItem.get(item.id) ?? []; // newest first
+      let unassigned = round3(Math.max(0, Number(item.stock_quantity) || 0));
+      const remainingByLine = new Map<number, number>();
+      for (const line of itemLines) {
+        const take = round3(Math.min(unassigned, line.quantity));
+        remainingByLine.set(line.id, take);
+        unassigned = round3(unassigned - take);
+      }
+
+      const price = Number(item.price) || 0;
+
+      if (unassigned > 0) {
+        const oldestLine = itemLines[itemLines.length - 1];
+        const receivedAt = oldestLine && oldestLine.created_at < item.created_at ? oldestLine.created_at : item.created_at;
+        insertBatch.run(item.id, 'opening', null, null, receivedAt, unassigned, unassigned, null, price);
+      }
+
+      // Oldest first, so batch ids run in the same order as time.
+      for (const line of [...itemLines].reverse()) {
+        insertBatch.run(
+          item.id, 'purchase', line.purchase_id, line.id, line.created_at,
+          line.quantity, remainingByLine.get(line.id) ?? 0, line.unit_cost, price
+        );
+      }
+
+      if (itemLines.length > 0) {
+        setMargin.run(profitPercentFromSellingPrice(itemLines[0].unit_cost, price, saleGstRate(item)), item.id);
+      }
+
+      syncItemStock(item.id);
+    }
+  });
+  seed();
+}
+
+let syncStatement: Database.Statement | null = null;
+
+/**
+ * Recompute an item's cached stock and price from its batches.
+ *
+ *   stock_quantity = everything left across its batches
+ *   price          = the selling price of the batch that sells next (the
+ *                    oldest with stock left); if it is sold out, the price of
+ *                    its most recent batch; if it has never had stock, as is.
+ *
+ * This is the ONLY place either column is written. Everything that moves stock
+ * — a purchase, a sale, an adjustment, a repricing — changes batches and then
+ * calls this, so the cached figures cannot drift from the batches. Must be
+ * called inside the same transaction as the batch change.
+ */
+export function syncItemStock(itemId: number) {
+  syncStatement ??= db.prepare(`
+    UPDATE items SET
+      stock_quantity = (
+        SELECT ROUND(COALESCE(SUM(quantity_remaining), 0), 3) FROM stock_batches WHERE item_id = @id
+      ),
+      price = COALESCE(
+        (SELECT selling_price FROM stock_batches
+          WHERE item_id = @id AND quantity_remaining > 0
+          ORDER BY received_at ASC, id ASC LIMIT 1),
+        (SELECT selling_price FROM stock_batches
+          WHERE item_id = @id
+          ORDER BY received_at DESC, id DESC LIMIT 1),
+        price
+      )
+    WHERE id = @id
+  `);
+  syncStatement.run({ id: itemId });
 }
 
 export default db;

@@ -23,9 +23,15 @@ interface PurchaseReportRow {
   unit_cost: number;
   sgst_rate: number;
   cgst_rate: number;
+  igst_rate: number;
   sgst_amount: number;
   cgst_amount: number;
+  igst_amount: number;
   total_amount: number;
+  /** Selling price set on the purchase (incl. GST); null for very old lines. */
+  selling_price: number | null;
+  /** Margin on cost before GST. Only in the download — not shown on screen. */
+  profit_percent: number | null;
 }
 
 interface SalesReportRow {
@@ -227,7 +233,10 @@ export const Reports = () => {
 
     downloadCsv(
       `purchase-report-${getISTTimestampForFileName()}.csv`,
-      ['Purchase Number', 'Date & Time', 'Supplier', 'Supplier GSTIN', 'Invoice Number', 'Invoice Date', 'Created By', 'Item', 'HSN', 'Quantity', 'Metric', 'Unit Cost', 'SGST %', 'CGST %', 'SGST Amount', 'CGST Amount', 'Line Total'],
+      // IGST columns were missing, so an inter-state purchase downloaded as if
+      // it carried no tax. Selling price and profit % are recorded on each
+      // purchase line and appear only here, not on screen.
+      ['Purchase Number', 'Date & Time', 'Supplier', 'Supplier GSTIN', 'Invoice Number', 'Invoice Date', 'Created By', 'Item', 'HSN', 'Quantity', 'Metric', 'Unit Cost (before GST)', 'SGST %', 'CGST %', 'IGST %', 'SGST Amount', 'CGST Amount', 'IGST Amount', 'Line Total', 'Selling Price (incl. GST)', 'Profit %'],
       filteredPurchaseRows.map((row) => [
         row.purchase_number,
         formatDateTimeInIST(row.created_at, { month: '2-digit', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }),
@@ -243,9 +252,13 @@ export const Reports = () => {
         row.unit_cost.toFixed(2),
         row.sgst_rate.toFixed(2),
         row.cgst_rate.toFixed(2),
+        (row.igst_rate ?? 0).toFixed(2),
         row.sgst_amount.toFixed(2),
         row.cgst_amount.toFixed(2),
+        (row.igst_amount ?? 0).toFixed(2),
         row.total_amount.toFixed(2),
+        row.selling_price == null ? '' : row.selling_price.toFixed(2),
+        row.profit_percent == null ? '' : row.profit_percent.toFixed(2),
       ])
     );
   };

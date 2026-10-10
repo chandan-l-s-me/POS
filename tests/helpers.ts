@@ -64,6 +64,10 @@ export async function startServer(env: Record<string, string> = {}): Promise<Tes
         JWT_SECRET: 'test-secret-not-used-in-production-0123456789abcdef',
         ADMIN_INITIAL_PASSWORD: ADMIN_PASSWORD,
         SEED_DEMO_DATA: '',
+        // Backups of a test database belong in its temp folder, never the
+        // shop's backups/; automatic ones are off unless a test turns them on.
+        BACKUP_DIR: path.join(dir, 'backups'),
+        AUTO_BACKUP_HOURS: '0',
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -169,3 +173,93 @@ export type Client = ReturnType<typeof client>;
 
 /** Round to paise, the same way server.ts and the cart store do. */
 export const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+// ---------------------------------------------------------------------------
+// Items and stock
+//
+// An item can only come into existence as a new item on a saved purchase —
+// there is no other way to create one. Tests that just need "an item that
+// sells at ₹X with N in stock" use makeStockedItem, which buys it.
+
+let itemSeq = 0;
+
+/** Catalogue fields for a test item, with sensible defaults. */
+export const itemFields = (overrides: Record<string, unknown> = {}) => ({
+  name: `Item ${Date.now().toString(36)}-${++itemSeq}`,
+  hsn_code: String(10000000 + itemSeq),
+  metric: 'piece',
+  is_loose: false,
+  gst_applicable: true,
+  gst_mode: 'split',
+  gst_rate: 18,
+  sgst_rate: 9,
+  cgst_rate: 9,
+  igst_rate: 0,
+  ...overrides,
+});
+
+/**
+ * The GST on a purchase line, from catalogue-style fields. A new item takes
+ * its sale GST from the line it is bought on.
+ */
+export const lineRates = (fields: Record<string, any>) => {
+  if (fields.gst_applicable === false || !Number(fields.gst_rate || fields.igst_rate || 0)) {
+    return { sgst_rate: 0, cgst_rate: 0, igst_rate: 0 };
+  }
+  if (fields.gst_mode === 'igst') return { sgst_rate: 0, cgst_rate: 0, igst_rate: Number(fields.igst_rate || fields.gst_rate) };
+  return { sgst_rate: Number(fields.sgst_rate), cgst_rate: Number(fields.cgst_rate), igst_rate: 0 };
+};
+
+/**
+ * Buy a brand-new item: one purchase whose single line creates it. Returns the
+ * new item's id.
+ */
+export async function purchaseNewItem(
+  c: Client,
+  fields: Record<string, any>,
+  { quantity, unit_cost, selling_price, supplier_name = 'Test Supplier' }:
+    { quantity: number; unit_cost: number; selling_price: number; supplier_name?: string }
+) {
+  const res = await c.post('/api/purchases', {
+    supplier_name,
+    items: [{
+      new_item: { name: fields.name, hsn_code: fields.hsn_code, metric: fields.metric },
+      quantity, unit_cost, selling_price, ...lineRates(fields),
+    }],
+  });
+  if (res.status !== 201) throw new Error(`new item purchase failed: ${res.status} ${JSON.stringify(res.body)}`);
+  return res.body.created_items[0].id as number;
+}
+
+/** Add a batch of stock to an item through a stock adjustment. */
+export async function addStock(
+  c: Client,
+  itemId: number,
+  { quantity, selling_price, unit_cost, reason = 'Test stock' }:
+    { quantity: number; selling_price?: number; unit_cost?: number | null; reason?: string }
+) {
+  const res = await c.post(`/api/items/${itemId}/stock-adjustments`, { quantity, selling_price, unit_cost, reason });
+  if (res.status !== 201) throw new Error(`addStock failed: ${res.status} ${JSON.stringify(res.body)}`);
+  return res.body;
+}
+
+/**
+ * Create an item that sells at `price` (GST-inclusive) with `stock_quantity`
+ * in stock, by buying it. Any other field is a catalogue field. With a stock
+ * of 0 it is bought and the unit removed again, so it exists with none left.
+ */
+export async function makeStockedItem(c: Client, overrides: Record<string, unknown> = {}) {
+  const { price = 100, stock_quantity = 1000, unit_cost, ...catalogue } = overrides as any;
+  const fields = itemFields(catalogue);
+  const quantity = Number(stock_quantity);
+  const id = await purchaseNewItem(c, fields, {
+    quantity: quantity > 0 ? quantity : 1,
+    unit_cost: unit_cost == null ? round2(Number(price) * 0.7) : Number(unit_cost),
+    selling_price: Number(price),
+  });
+  if (!(quantity > 0)) {
+    const res = await c.post(`/api/items/${id}/stock-adjustments`, { quantity: -1, reason: 'Test: start with none' });
+    if (res.status !== 201) throw new Error(`emptying stock failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  return { id, ...fields, price: Number(price), stock_quantity: quantity };
+}

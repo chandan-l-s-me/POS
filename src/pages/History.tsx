@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../api';
 import { Bill } from '../types';
 import { useDataStore } from '../store/useDataStore';
+import { useAuthStore } from '../store/useAuthStore';
 import { 
   Search, 
   Calendar, 
@@ -9,6 +10,7 @@ import {
   ChevronRight, 
   Download,
   Filter,
+  Trash2,
   X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -42,6 +44,8 @@ const subtotalOf = (bill: Bill) => {
 
 export const History = () => {
   const settings = useDataStore((state) => state.settings);
+  const refreshItems = useDataStore((state) => state.refreshItems);
+  const isAdmin = useAuthStore((state) => state.user?.role === 'admin');
   const [bills, setBills] = useState<Bill[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -54,6 +58,13 @@ export const History = () => {
   const [loading, setLoading] = useState(true);
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [showBillModal, setShowBillModal] = useState(false);
+  // Deleting asks again inside the modal rather than with confirm(): a
+  // browser dialog can drop the till out of full screen.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Bumped after a delete so the list is fetched again.
+  const [reloadKey, setReloadKey] = useState(0);
 
   const receiptRef = useRef<HTMLDivElement>(null);
   const handlePrint = usePrint({
@@ -98,7 +109,7 @@ export const History = () => {
         alert('Failed to fetch history: ' + err.message);
       })
       .finally(() => setLoading(false));
-  }, [startDate, endDate, appliedSearch, page]);
+  }, [startDate, endDate, appliedSearch, page, reloadKey]);
 
   const pageCount = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
 
@@ -201,9 +212,37 @@ export const History = () => {
     try {
       const bill = await api.getBill(id);
       setSelectedBill(bill);
+      setConfirmingDelete(false);
+      setDeleteError(null);
       setShowBillModal(true);
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  const closeBillModal = () => {
+    setShowBillModal(false);
+    setConfirmingDelete(false);
+    setDeleteError(null);
+  };
+
+  const handleDeleteBill = async () => {
+    if (!selectedBill) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.deleteBill(selectedBill.id);
+      closeBillModal();
+      setSelectedBill(null);
+      // The last bill on a later page: step back rather than show an empty page.
+      if (bills.length === 1 && page > 0) setPage(page - 1);
+      setReloadKey((key) => key + 1);
+      // Its stock is back on the shelf; the till's item cache must see it.
+      refreshItems().catch(() => {});
+    } catch (err: any) {
+      setDeleteError(err.message);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -397,10 +436,56 @@ export const History = () => {
               <div className="flex-1 p-8 overflow-auto">
                 <div className="flex items-center justify-between mb-8">
                   <h3 className="font-bold text-2xl">Bill Details</h3>
-                  <button onClick={() => setShowBillModal(false)} className="p-2 hover:bg-gray-100 rounded-full">
-                    <X size={24} />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {isAdmin && !confirmingDelete && (
+                      <button
+                        onClick={() => { setConfirmingDelete(true); setDeleteError(null); }}
+                        className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-red-600 border border-red-200 rounded-2xl hover:bg-red-50 transition-all"
+                      >
+                        <Trash2 size={16} />
+                        Delete Bill
+                      </button>
+                    )}
+                    <button onClick={closeBillModal} className="p-2 hover:bg-gray-100 rounded-full">
+                      <X size={24} />
+                    </button>
+                  </div>
                 </div>
+
+                {confirmingDelete && (
+                  <div className="mb-8 rounded-2xl border border-red-200 bg-red-50 p-5">
+                    <p className="font-bold text-red-700">Delete bill {selectedBill.bill_number}?</p>
+                    <ul className="mt-2 list-disc pl-5 text-sm text-red-700 space-y-1">
+                      <li>Every item on it goes back into stock.</li>
+                      {selectedBill.credit_amount > 0 && (
+                        <li>
+                          ₹{selectedBill.credit_amount.toFixed(2)} comes off {billCustomerDisplayName(selectedBill)}’s credit balance.
+                        </li>
+                      )}
+                      <li>It is removed from history, the customer’s passbook, reports and the dashboard. This cannot be undone.</li>
+                    </ul>
+                    {deleteError && (
+                      <p className="mt-3 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-red-700 border border-red-200">{deleteError}</p>
+                    )}
+                    <div className="mt-4 flex gap-2">
+                      <button
+                        onClick={handleDeleteBill}
+                        disabled={deleting}
+                        className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-red-600 rounded-2xl hover:bg-red-700 transition-all disabled:opacity-50 disabled:pointer-events-none"
+                      >
+                        <Trash2 size={16} />
+                        {deleting ? 'Deleting…' : 'Yes, delete bill'}
+                      </button>
+                      <button
+                        onClick={() => { setConfirmingDelete(false); setDeleteError(null); }}
+                        disabled={deleting}
+                        className="px-4 py-2 text-sm font-bold text-gray-700 bg-white border border-gray-200 rounded-2xl hover:bg-gray-50 transition-all disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-3 gap-8 mb-8">
                   <div>

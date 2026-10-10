@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { ADMIN_PASSWORD, client, startServer, type Client, type TestServer } from './helpers.ts';
+import { ADMIN_PASSWORD, client, makeStockedItem, startServer, type Client, type TestServer } from './helpers.ts';
 import {
   billCustomerContactName,
   billCustomerDisplayName,
@@ -81,17 +81,10 @@ let admin: Client;
 let phoneSeed = 6000000000;
 const nextPhone = () => String(phoneSeed++);
 
-const makeItem = async () => {
-  const res = await admin.post('/api/items', {
-    name: `Item ${Math.random().toString(36).slice(2, 10)}`,
-    hsn_code: String(Math.floor(Math.random() * 1e8)).padStart(8, '0'),
-    price: 100, metric: 'piece', is_loose: false,
-    gst_applicable: false, gst_mode: 'split', gst_rate: 0,
-    sgst_rate: 0, cgst_rate: 0, igst_rate: 0, stock_quantity: 1000,
-  });
-  assert.equal(res.status, 200, JSON.stringify(res.body));
-  return res.body.id as number;
-};
+const makeItem = async () =>
+  (await makeStockedItem(admin, {
+    gst_applicable: false, gst_rate: 0, sgst_rate: 0, cgst_rate: 0, igst_rate: 0,
+  })).id;
 
 describe('the server', () => {
   before(async () => {

@@ -4,6 +4,7 @@ import { api } from '../api';
 import { ShopSettings, User } from '../types';
 import { useAuthStore } from '../store/useAuthStore';
 import { defaultShopSettings, useDataStore } from '../store/useDataStore';
+import { formatDateTimeInIST } from '../lib/utils';
 
 type SettingsField =
   | 'shop_name'
@@ -36,7 +37,17 @@ export const Settings = () => {
   const [cashierForm, setCashierForm] = useState({ name: '', username: '', password: '' });
   const [isCreatingCashier, setIsCreatingCashier] = useState(false);
   const [cashierMessage, setCashierMessage] = useState('');
-  const [backupStatus, setBackupStatus] = useState<{ configured: boolean; backup_directory: string } | null>(null);
+  const [backupStatus, setBackupStatus] = useState<{
+    configured: boolean;
+    backup_directory: string;
+    copy_directory?: string | null;
+    auto_backup_hours?: number;
+    keep_days?: number;
+    backup_count?: number;
+    last_backup_at?: string | null;
+    last_backup_file?: string | null;
+    last_auto_backup_at?: string | null;
+  } | null>(null);
   const [backupMessage, setBackupMessage] = useState('');
   const [isBackingUp, setIsBackingUp] = useState(false);
 
@@ -218,7 +229,10 @@ export const Settings = () => {
 
     try {
       const result = await api.createLocalBackup();
-      setBackupMessage(`Backup saved successfully as ${result.fileName} in ${result.filePath}.`);
+      setBackupMessage(
+        `Backup saved successfully as ${result.fileName}` + (result.copiedTo ? `, and copied to ${result.copiedTo}.` : '.')
+      );
+      api.getLocalBackupStatus().then(setBackupStatus).catch(() => {});
     } catch (err: any) {
       setBackupMessage(err.message || 'Failed to create backup.');
     } finally {
@@ -557,25 +571,51 @@ export const Settings = () => {
 
         <div className="grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">Status</p>
-            <p className={`mt-2 font-bold ${backupStatus?.configured ? 'text-green-600' : 'text-red-600'}`}>
-              {backupStatus?.configured ? 'Configured' : 'Not Configured'}
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">Last Backup</p>
+            <p className={`mt-2 font-bold ${backupStatus?.last_backup_at ? 'text-gray-900' : 'text-red-600'}`}>
+              {backupStatus?.last_backup_at ? formatDateTimeInIST(backupStatus.last_backup_at) : 'Never'}
             </p>
+            {backupStatus?.backup_count != null && (
+              <p className="text-xs text-gray-500 mt-1">{backupStatus.backup_count} backup{backupStatus.backup_count === 1 ? '' : 's'} on this computer</p>
+            )}
           </div>
-          <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 md:col-span-2">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">Backup Folder</p>
-            <p className="mt-2 text-sm font-medium text-gray-700 break-all">
-              {backupStatus?.backup_directory || 'backups'}
-            </p>
+          <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">Automatic Backups</p>
+            {backupStatus?.auto_backup_hours ? (
+              <>
+                <p className="mt-2 font-bold text-green-600">
+                  Every {backupStatus.auto_backup_hours === 24 ? 'day' : `${backupStatus.auto_backup_hours} hours`}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Kept for {backupStatus.keep_days} days ·{' '}
+                  {backupStatus.last_auto_backup_at ? `last ${formatDateTimeInIST(backupStatus.last_auto_backup_at)}` : 'first one within a few minutes'}
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 font-bold text-red-600">Off</p>
+            )}
+          </div>
+          <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">Second Copy</p>
+            {backupStatus?.copy_directory ? (
+              <p className="mt-2 text-sm font-medium text-gray-700 break-all">{backupStatus.copy_directory}</p>
+            ) : (
+              <>
+                <p className="mt-2 font-bold text-amber-600">Not set</p>
+                <p className="text-xs text-gray-500 mt-1">Backups are only on this computer</p>
+              </>
+            )}
           </div>
         </div>
 
         <div className="rounded-2xl border border-orange-100 bg-orange-50 p-5 text-sm text-gray-600 space-y-2">
-          <p className="font-semibold text-gray-900">Setup methodology</p>
-          <p>1. Open admin settings whenever you want a manual backup.</p>
-          <p>2. Click the backup button below.</p>
-          <p>3. The app writes a full JSON backup into the local `backups/` folder.</p>
-          <p>4. You can then copy that file anywhere else for safekeeping.</p>
+          <p className="font-semibold text-gray-900">How backups work</p>
+          <p>• Each backup is a complete copy of the shop’s database (a <span className="font-mono">.db</span> file) that can be restored as it is.</p>
+          <p>• The app takes one automatically every day while it is running, and keeps them for {backupStatus?.keep_days ?? 30} days. Backups made with the button below are never deleted.</p>
+          <p>
+            • To protect against this computer’s disk failing, set <span className="font-mono">BACKUP_COPY_DIR</span> in the
+            <span className="font-mono"> .env</span> file to a USB drive or a Google Drive / OneDrive folder — every backup is then copied there too.
+          </p>
         </div>
 
         <div className="flex items-center gap-4">

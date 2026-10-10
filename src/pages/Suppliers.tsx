@@ -11,7 +11,9 @@ import {
   Truck,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Link } from 'react-router-dom';
 import { Supplier } from '../types';
+import { formatRupees } from '../lib/supplierPayments';
 
 export const Suppliers = () => {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -151,8 +153,14 @@ export const Suppliers = () => {
 
             <div className="pt-6 border-t border-gray-50 flex items-center justify-between">
               <div>
-                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">Supplier</p>
-                <p className="text-lg font-black text-orange-600">Active</p>
+                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">Owed to supplier</p>
+                {(supplier.amount_due ?? 0) > 0 ? (
+                  <Link to="/purchase-credit" className="text-lg font-black text-orange-600 hover:underline">
+                    {formatRupees(supplier.amount_due ?? 0)}
+                  </Link>
+                ) : (
+                  <p className="text-lg font-black text-emerald-600">Nothing due</p>
+                )}
               </div>
               <Truck size={20} className="text-gray-400" />
             </div>

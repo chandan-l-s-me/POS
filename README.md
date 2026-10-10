@@ -55,6 +55,32 @@ shop's network can read passwords and session tokens off the wire. If more than
 one machine needs it, put it behind a reverse proxy that terminates HTTPS and
 leave the app itself on loopback.
 
+### Remote access through a Cloudflare Tunnel
+
+The intended way to reach the app from outside the shop. `cloudflared` runs on
+the same machine and connects to `http://127.0.0.1:3000`, so the app stays on
+loopback and Cloudflare provides HTTPS. No router ports are opened.
+
+1. `NODE_ENV=production` in `.env`, then `npm run build` and `npm start`. In
+   development mode the app refuses tunnel traffic (503) so the Vite dev server
+   is never exposed.
+2. Change every password first. Accounts still on a demo password from
+   `scripts/seed-demo.ts` are refused from the internet and can only sign in at
+   the counter; demo passwords cannot be set again.
+3. Install `cloudflared` as a service and route a hostname to
+   `http://localhost:3000`.
+4. Put **Cloudflare Access** (Zero Trust, free up to 50 users) in front of that
+   hostname, allowing only the owner's and staff's email addresses. Visitors
+   then prove their email before they ever see the sign-in page.
+
+How the app treats tunnel traffic: a request from loopback carrying
+`CF-Connecting-IP` is a tunnel visitor, identified by that address (the header
+is trusted only from loopback). Sign-in is throttled per visitor (5 failures →
+15 minutes), and remote failures on one account are also counted together
+(20 → remote sign-in to that account blocked for 15 minutes). Sign-in at the
+counter is never blocked by remote failures, so nobody can lock the shop out of
+its own till.
+
 ---
 
 ## Full screen / kiosk
@@ -103,8 +129,13 @@ beside it — they are part of the database, copy them together or use the backu
 button). It holds customer names, phone numbers, addresses, GSTINs, outstanding
 balances and hashed passwords.
 
-Settings → **Local Disk Backup** writes a consistent snapshot into `backups/`
-using `VACUUM INTO`. The result is a real `.db` file: to restore, stop the
+The app backs itself up automatically once a day while it runs (and shortly
+after starting, if the last one is older than that), keeping automatic backups
+for 30 days; set `BACKUP_COPY_DIR` to have each one copied to a USB drive or a
+cloud-synced folder as well. See the backup settings in `.env.example`.
+Settings → **Local Disk Backup** shows when the last one ran, and **Backup
+Now** writes one on demand. Both write a consistent snapshot into `backups/`
+(or `BACKUP_DIR`) using `VACUUM INTO`. The result is a real `.db` file: to restore, stop the
 server and put it at `DB_PATH`. Backups are written `0600`, and `backups/` is
 git-ignored, as are `*.db` and `.env`. Keep it that way.
 
@@ -189,13 +220,79 @@ credit billed, not the balance as it stood on the day.
 
 ---
 
+## Stock, purchases and FIFO pricing
+
+**Items exist only because they were bought.** There is no "add item" anywhere
+else, and no API to create one on its own. On the Purchases screen, typing a
+name that isn't in the catalogue makes that row a *new item*: its HSN code and
+unit (a dropdown) are filled in right in the row. The item is created only
+when the purchase is saved, in the same transaction, and it takes its sale GST
+from the line it was bought on. An abandoned purchase leaves nothing behind.
+Duplicate names are refused. The unit list is `src/lib/units.ts`.
+
+Each purchase line records the
+cost (before GST), the GST it was bought at, and a **selling price**
+(GST-inclusive) that the owner types in. The cost can be typed **before or
+after GST**: the other box is worked out from the GST dropdown, and changing
+the GST moves the box that wasn't typed. A cost worked back from an after-GST
+figure is sent with six decimals (₹100 incl. 18% is ₹84.745763), so the line
+totals exactly what was typed. Picking an existing item starts from
+the selling price set on its last purchase. A price that doesn't cover the cost
+is flagged "Below cost" but allowed. The GST type and slab are one dropdown
+(*No GST*, *GST 5–28%* for CGST + SGST, *IGST 5–28%*).
+
+The **profit %** each line makes is worked out and stored on save
+(`purchase_items.profit_percent`, next to `selling_price`). It is never shown
+on screen. It appears only in the purchase report download (Reports →
+Purchase items CSV). Profit is on the cost *before* GST, because the shop
+claims purchase GST back: ₹70.80 incl. 18% is ₹60.00, which is 20% on a ₹50.00
+cost. Purchases made before this existed get both filled in on upgrade, from
+their stock batch.
+
+**Stock is held in batches** (`stock_batches`): one per purchase line, each
+with its own quantity left, cost and selling price. **Billing takes from the
+oldest batch first, at that batch's price.** If yeast was bought last week at
+₹85 and this week at ₹90, last week's stock is sold first at last week's price.
+This week's price applies only once that stock runs out. A sale that runs past
+the old stock becomes two lines on the bill, e.g. 3 @ ₹107.10 + 2 @ ₹113.40.
+
+**The unit price cannot be changed at billing**, by a cashier or an admin. The
+till shows it read-only. It is the selling price set on the purchase, and the
+way to change it is to reprice the batch in Items → *Stock & prices*. The
+server refuses a bill that asks for any other price (400, naming the price the
+stock sells at), so this holds even for requests that bypass the screen.
+`bill_items.price_overridden` is kept for lines written before this, and is 0
+on every new line.
+
+**Stock only moves three ways:** purchases add a batch; sales draw down batches
+oldest first (`bill_item_batches` records which); and **stock adjustments** add
+or remove stock with a reason (Items → *Stock & prices*). The item form can no
+longer set a price or a stock figure. `items.stock_quantity` and `items.price`
+are a cache — total left, and the price of the batch that sells next. They are
+written only by `syncItemStock()` in `db/index.ts`, after every batch change, so
+they cannot drift. `tests/fifo.test.ts` checks that against the batches after
+every kind of change.
+
+**Prices can change while a bill is open.** Another sale can use up the batch a
+cart line was priced from. The till therefore sends the total it showed
+(`expected_total`). If the server now works out a different total, it refuses
+with `409 PRICE_CHANGED`, and the till re-prices the bill and shows a notice.
+The customer is never charged an amount that wasn't on screen.
+
+**On upgrade**, existing stock is rebuilt into batches from purchase history.
+Each item's current stock is assigned to its newest purchases first, which is
+what FIFO would have left on the shelf. Anything the purchases don't explain
+becomes one 'opening' batch with an unknown cost. Every rebuilt batch keeps the
+item's current selling price, so nothing changes at the counter.
+
+---
+
 ## How the money is calculated
 
-Worth understanding before changing anything in this area, because two separate
-pieces of code have to agree.
+Worth understanding before changing anything in this area.
 
-Item prices are **GST-inclusive**. For each line the server computes, in this
-order:
+Item prices are **GST-inclusive**. For each bill line (one per price segment,
+see above) the computation is, in this order:
 
 ```
 line total   = round2(unit price x quantity)
@@ -207,14 +304,17 @@ Deriving the taxable value by subtraction, rather than multiplying a rounded
 unit base by the quantity, is what makes `taxable + tax === total` exactly true
 for every line, so the invoice reconciles. The bill's payable is then
 `floor(subtotal + tax - discount)` — the shop settles in whole rupees and the
-dropped paise become the invoice's **Round Off** line.
+dropped paise become the invoice's **Round Off** line. The Billing screen has
+no discount field, so the till always sends none; the API still accepts a
+`discount_amount`, and older bills that had one print it as before.
 
-The server recomputes all of this from the `items` table and ignores any
-prices, tax amounts or totals in the request, so a tampered request cannot
-under-record a sale. `src/store/useCartStore.ts` mirrors the same arithmetic so
-the figure on the till matches the figure in the ledger; `tests/cart-parity.test.ts`
-checks that across ~560 price/rate/quantity combinations. **If you change one,
-change the other**, and run that test.
+The server recomputes all of this from the batches. It ignores any amounts,
+taxes or totals in the request, and refuses a per-line `unit_price` that is not
+exactly the price the stock sells at. The arithmetic and the FIFO allocation live in
+**one place**, `src/lib/billMath.ts`. The server and the till's cart store both
+import it, so they cannot drift apart. `tests/cart-parity.test.ts` still checks
+the end result across ~560 price/rate/quantity combinations, a line split
+across batches, and a typed price.
 
 ---
 
@@ -224,7 +324,7 @@ change the other**, and run that test.
 npm test
 ```
 
-236 tests. The server-facing files mock nothing: each boots the real
+279 tests. The server-facing files mock nothing: each boots the real
 `server.ts` as a child process against a throwaway database and drives it over
 HTTP. `fullscreen.test.ts` is the one exception — it drives the Fullscreen API
 shim against fake documents, because the real thing needs a real browser and a
@@ -234,6 +334,7 @@ real user gesture.
 | --- | --- |
 | `auth.test.ts` | Login, throttling, token forgery, role gates, account management |
 | `billing.test.ts` | Bill arithmetic, GST, rounding, stock, payment reconciliation, concurrency |
+| `fifo.test.ts` | Batches, oldest-first selling, split lines, prices not changeable at billing, adjustments, stock always adding up |
 | `cart-parity.test.ts` | The till's displayed total vs. the recorded total |
 | `catalogue.test.ts` | Items, customers, suppliers, settings |
 | `customer-identity.test.ts` | Bakery-first naming: the shared rule, validation, sorting and search |
@@ -241,7 +342,7 @@ real user gesture.
 | `credit-ledger.test.ts` | Credit entries, repayments, and that the ledger never drifts from the balance |
 | `fullscreen.test.ts` | Fullscreen shim: vendor prefixes, refusals, storage failures, restoring after printing |
 | `purchases-reports.test.ts` | Purchases, reports, analytics, audit log, backups |
-| `migration.test.ts` | Upgrading an existing database in place, including the ledger backfill |
+| `migration.test.ts` | Upgrading an existing database in place: subtotals, the credit ledger, stock batches |
 
 They run sequentially (`--test-concurrency=1`); each spawns a server, so a
 parallel run just fights itself for CPU.
@@ -251,13 +352,16 @@ parallel run just fights itself for CPU.
 ## Layout
 
 ```
-server.ts              API, auth, validation, all money calculations
-db/index.ts            Schema, migrations, indexes
+server.ts              API, auth, validation, billing and purchase routes
+db/index.ts            Schema, migrations, indexes, syncItemStock()
 db/asyncRead.ts        Worker pool for heavy reads
 db/read-worker.mjs     Read-only SQLite connection (keeps billing responsive)
 src/pages/             One file per screen
 src/store/             Zustand stores (cart, auth, catalogue cache, theme)
+src/lib/billMath.ts    Bill arithmetic + FIFO allocation, shared by server and till
+src/lib/cartActions.ts Adding to the bill: reads batches, refuses missing stock
 src/lib/fullscreen.ts  Fullscreen API shim (prefixes, preference storage)
+src/components/StockPanel.tsx  An item's batches, repricing, stock adjustments
 src/components/Receipt.tsx   Thermal (80mm) and A4 tax invoice layouts
 tests/                 End-to-end suite
 ```

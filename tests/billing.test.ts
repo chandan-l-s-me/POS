@@ -12,31 +12,13 @@
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { ADMIN_PASSWORD, client, round2, startServer, type Client, type TestServer } from './helpers.ts';
+import { ADMIN_PASSWORD, client, makeStockedItem, round2, startServer, type Client, type TestServer } from './helpers.ts';
 
 let server: TestServer;
 let admin: Client;
 
-const makeItem = async (overrides: Record<string, unknown> = {}) => {
-  const body = {
-    name: `Item ${Math.random().toString(36).slice(2, 10)}`,
-    hsn_code: String(Math.floor(Math.random() * 1e8)).padStart(8, '0'),
-    price: 100,
-    metric: 'piece',
-    is_loose: false,
-    gst_applicable: true,
-    gst_mode: 'split',
-    gst_rate: 18,
-    sgst_rate: 9,
-    cgst_rate: 9,
-    igst_rate: 0,
-    stock_quantity: 1000,
-    ...overrides,
-  };
-  const res = await admin.post('/api/items', body);
-  assert.equal(res.status, 200, `item create failed: ${JSON.stringify(res.body)}`);
-  return { id: res.body.id as number, ...body };
-};
+// Sells at `price` with `stock_quantity` on hand, via the real API.
+const makeItem = (overrides: Record<string, unknown> = {}) => makeStockedItem(admin, overrides);
 
 const makeCustomer = async (overrides: Record<string, unknown> = {}) => {
   const body = {

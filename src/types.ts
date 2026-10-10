@@ -32,6 +32,10 @@ export interface Item {
   id: number;
   name: string;
   hsn_code: string;
+  /**
+   * GST-inclusive selling price of the batch that sells next (the oldest with
+   * stock left). A cache maintained by the server — never set directly.
+   */
   price: number;
   metric: string;
   is_loose: boolean;
@@ -42,8 +46,30 @@ export interface Item {
   cgst_rate: number;
   igst_rate?: number;
   image_url?: string;
+  /** Total left across all batches. A cache maintained by the server. */
   stock_quantity: number;
+  /** Profit margin used on the last purchase, offered on the next one. */
+  default_profit_percent?: number | null;
   created_at: string;
+}
+
+/** One lot of an item's stock, sold oldest first. */
+export interface StockBatch {
+  id: number;
+  source: 'purchase' | 'adjustment' | 'opening';
+  received_at: string;
+  quantity_received: number;
+  quantity_remaining: number;
+  /** GST-inclusive. */
+  selling_price: number;
+  /** Before GST. Admins only; null when not known. */
+  unit_cost?: number | null;
+  /** Admins only; null when the cost is not known. */
+  profit_percent?: number | null;
+  purchase_id?: number | null;
+  purchase_number?: string | null;
+  supplier_name?: string | null;
+  invoice_number?: string | null;
 }
 
 export interface Customer {
@@ -128,6 +154,8 @@ export interface Supplier {
   supplier_address?: string;
   supplier_gstin?: string;
   created_at: string;
+  /** What the shop still owes this supplier. */
+  amount_due?: number;
 }
 
 export interface BillItem {
@@ -138,7 +166,12 @@ export interface BillItem {
   hsn_code: string;
   metric: string;
   quantity: number;
+  /** Taxable value per unit. */
   price: number;
+  /** GST-inclusive price per unit charged on this line. */
+  unit_price?: number;
+  /** 1 when the cashier changed the price. Billing no longer allows it; older lines only. */
+  price_overridden?: number;
   sgst_amount: number;
   cgst_amount: number;
   igst_amount?: number;
@@ -206,20 +239,187 @@ export interface Purchase {
   total_amount: number;
   created_at: string;
   items?: PurchaseItem[];
+  supplier_id?: number;
+  /** Paid against this purchase so far, and what is still owed on it. */
+  amount_paid?: number;
+  balance_due?: number;
+  payments?: PurchasePayment[];
+}
+
+export type SupplierPaymentMethod = 'cash' | 'upi' | 'bank' | 'cheque';
+
+/** One payment's share of one purchase. */
+export interface PurchasePayment {
+  payment_id: number;
+  /** The part of the payment that went to this purchase. */
+  amount: number;
+  /** The whole payment, which may have covered other purchases too. */
+  payment_amount: number;
+  paid_on: string;
+  method: SupplierPaymentMethod | null;
+  reference: string | null;
+  note: string | null;
+  user_name: string;
+  created_at: string;
+}
+
+/** A purchase with money still owed on it, as the Purchase Credit page lists it. */
+export interface CreditPurchase {
+  id: number;
+  purchase_number: string;
+  supplier_id: number;
+  invoice_supplier_name: string;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  created_at: string;
+  total_amount: number;
+  amount_paid: number;
+  balance_due: number;
+  age_days: number;
+}
+
+export interface SupplierCredit {
+  supplier_id: number;
+  name: string;
+  phone?: string | null;
+  gstin?: string | null;
+  total_due: number;
+  oldest_age_days: number;
+  purchases: CreditPurchase[];
+}
+
+export interface PaidPurchase {
+  id: number;
+  purchase_number: string;
+  supplier_id: number;
+  supplier_name: string;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  created_at: string;
+  total_amount: number;
+  amount_paid: number;
+  /** The day the last payment cleared it. */
+  paid_off_on: string;
+  payment_count: number;
+  /** Comma-separated methods used, or null when none was recorded. */
+  methods: string | null;
+}
+
+export interface SupplierPayment {
+  id: number;
+  supplier_id: number;
+  supplier_name: string;
+  amount: number;
+  paid_on: string;
+  method: SupplierPaymentMethod | null;
+  reference: string | null;
+  note: string | null;
+  user_name: string;
+  created_at: string;
+  allocations: Array<{ amount: number; purchase_id: number; purchase_number: string; invoice_number?: string | null }>;
+}
+
+/** Part of a cart line charged at one price: units from batches at the same price. */
+export interface CartSegment {
+  quantity: number;
+  unit_price: number;
+  total_amount: number;
+  taxable_amount: number;
+  sgst_amount: number;
+  cgst_amount: number;
+  igst_amount: number;
 }
 
 export interface CartItem extends Item {
   quantity: number;
+  /** Sums over `segments`. */
   sgst_amount: number;
   cgst_amount: number;
   igst_amount: number;
   total_amount: number;
   /**
-   * The line's taxable value: total_amount minus the three tax amounts, all
-   * already rounded. Derived by subtraction rather than multiplied out
-   * independently, so `taxable_amount + tax === total_amount` holds exactly
-   * and the cart's subtotal matches the one the server stores on the bill.
+   * The line's taxable value: each segment's total minus its rounded taxes,
+   * summed. Derived by subtraction, so the cart's subtotal matches the one the
+   * server stores on the bill.
    */
   taxable_amount: number;
-  original_price: number; // The total cost inclusive of GST
+  /** The item's stock when it went into the cart, oldest batch first. */
+  batches: Array<{ id: number; quantity_remaining: number; selling_price: number }>;
+  /** Total of `batches`. */
+  available: number;
+  /** The GST-inclusive unit price of the first segment. Not editable at the till. */
+  unit_price: number;
+  /** How the line is charged: one segment, or several when it crosses batches. */
+  segments: CartSegment[];
+}
+
+/** Part of a customer's balance: a credit bill (or opening balance) not yet paid off. */
+export interface UnpaidCredit {
+  entry_id: number | null;
+  kind: 'sale' | 'opening' | 'adjustment' | 'payment';
+  bill_id: number | null;
+  bill_number: string | null;
+  bill_total: number | null;
+  note: string | null;
+  created_at: string | null;
+  /** What this line put on the customer's account. */
+  credit_amount: number;
+  /** How much of it is still owed. */
+  outstanding: number;
+  age_days: number;
+}
+
+export type AgeingKey = 'd0_30' | 'd31_60' | 'd61_90' | 'd90_plus';
+
+export interface CustomerCredit {
+  id: number;
+  name: string;
+  shop_name?: string | null;
+  display_name: string;
+  phone?: string | null;
+  balance: number;
+  last_payment_at: string | null;
+  /** Negative: a payment reduces the balance. */
+  last_payment_amount: number | null;
+  oldest_age_days: number;
+  ageing: Record<AgeingKey, number>;
+  /** Oldest first. */
+  unpaid: UnpaidCredit[];
+}
+
+export type StockStatus = 'in' | 'low' | 'out';
+
+/** One item on the Stock page. */
+export interface StockRow {
+  id: number;
+  name: string;
+  hsn_code?: string | null;
+  metric: string;
+  /** What it sells at next: the oldest batch with stock left. */
+  price: number;
+  stock_quantity: number;
+  status: StockStatus;
+  batch_count: number;
+  /** How many different selling prices the stock on the shelf has. */
+  price_count: number;
+  value_at_price: number;
+  /** Admins only. */
+  value_at_cost?: number;
+  /** Admins only: batches with stock whose cost is not known. */
+  uncosted_batches?: number;
+  last_purchased_at: string | null;
+  last_sold_at: string | null;
+  /** Units sold in the recent window (sales_window_days). */
+  sold_recent: number;
+  /** Days the stock lasts at the recent rate; null when it has not sold. */
+  days_left: number | null;
+}
+
+export interface StockSummary {
+  item_count: number;
+  in_stock: number;
+  low_stock: number;
+  out_of_stock: number;
+  value_at_price: number;
+  value_at_cost?: number;
 }

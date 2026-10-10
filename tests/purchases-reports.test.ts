@@ -4,24 +4,16 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import fs from 'node:fs';
-import { ADMIN_PASSWORD, client, round2, startServer, type Client, type TestServer } from './helpers.ts';
+import {
+  ADMIN_PASSWORD, client, itemFields, lineRates, makeStockedItem, purchaseNewItem, round2, startServer,
+  type Client, type TestServer,
+} from './helpers.ts';
 
 let server: TestServer;
 let admin: Client;
 
-const makeItem = async (overrides: Record<string, unknown> = {}) => {
-  const body = {
-    name: `Item ${Math.random().toString(36).slice(2, 10)}`,
-    hsn_code: String(Math.floor(Math.random() * 1e8)).padStart(8, '0'),
-    price: 100, metric: 'piece', is_loose: false,
-    gst_applicable: true, gst_mode: 'split', gst_rate: 18,
-    sgst_rate: 9, cgst_rate: 9, igst_rate: 0, stock_quantity: 100,
-    ...overrides,
-  };
-  const res = await admin.post('/api/items', body);
-  assert.equal(res.status, 200, JSON.stringify(res.body));
-  return { id: res.body.id as number, ...body };
-};
+const makeItem = (overrides: Record<string, unknown> = {}) =>
+  makeStockedItem(admin, { stock_quantity: 100, ...overrides });
 
 const stockOf = async (id: number) =>
   (await admin.get('/api/items?limit=1000')).body.data.find((r: any) => r.id === id).stock_quantity;
@@ -42,7 +34,7 @@ describe('purchases', () => {
       supplier_gstin: '29BBBBB1111B2Z6',
       invoice_number: 'WC-001',
       invoice_date: '2026-09-01',
-      items: [{ item_id: item.id, quantity: 10, unit_cost: 50, sgst_rate: 9, cgst_rate: 9, igst_rate: 0 }],
+      items: [{ item_id: item.id, quantity: 10, unit_cost: 50, sgst_rate: 9, cgst_rate: 9, igst_rate: 0, selling_price: 70.8 }],
     });
     assert.equal(created.status, 201, JSON.stringify(created.body));
 
@@ -62,11 +54,28 @@ describe('purchases', () => {
     assert.match(purchase.purchase_number, /^PUR-\d{8}-\d{5}$/);
   });
 
+  it('keeps a cost worked back from an after-GST price exact', async () => {
+    // The owner typed ₹100 a unit after 18% GST; the screen sends the cost
+    // before GST to six decimals. Ten units must come to exactly ₹1,000.
+    const item = await makeItem();
+    const created = await admin.post('/api/purchases', {
+      supplier_name: 'Wholesale Co',
+      items: [{ item_id: item.id, quantity: 10, unit_cost: 84.745763, sgst_rate: 9, cgst_rate: 9, igst_rate: 0, selling_price: 120 }],
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.equal(created.body.subtotal_amount, 847.46);
+    assert.equal(created.body.tax_amount, 152.54);
+    assert.equal(created.body.total_amount, 1000);
+
+    const line = (await admin.get(`/api/purchases/${created.body.purchase_id}`)).body.items[0];
+    assert.equal(line.unit_cost, 84.745763, 'the cost is stored as sent, not rounded to paise');
+  });
+
   it('adds purchased quantity to stock', async () => {
     const item = await makeItem({ stock_quantity: 5 });
     assert.equal((await admin.post('/api/purchases', {
       supplier_name: 'Wholesale Co',
-      items: [{ item_id: item.id, quantity: 20, unit_cost: 10, sgst_rate: 0, cgst_rate: 0, igst_rate: 0 }],
+      items: [{ item_id: item.id, quantity: 20, unit_cost: 10, sgst_rate: 0, cgst_rate: 0, igst_rate: 0, selling_price: 15 }],
     })).status, 201);
     assert.equal(await stockOf(item.id), 25);
   });
@@ -76,7 +85,7 @@ describe('purchases', () => {
     const created = await admin.post('/api/purchases', {
       supplier_name: 'Wholesale Co',
       items: [{
-        item_id: item.id, quantity: 2, unit_cost: 100,
+        item_id: item.id, quantity: 2, unit_cost: 100, selling_price: 150,
         sgst_rate: 9, cgst_rate: 9, igst_rate: 0,
         // A tampered input-tax-credit claim.
         sgst_amount: 99999, cgst_amount: 99999, total_amount: 1,
@@ -93,7 +102,7 @@ describe('purchases', () => {
     const item = await makeItem();
     const res = await admin.post('/api/purchases', {
       supplier_name: 'Wholesale Co',
-      items: [{ item_id: item.id, quantity: 1, unit_cost: 10, sgst_rate: 9, cgst_rate: 9, igst_rate: 18 }],
+      items: [{ item_id: item.id, quantity: 1, unit_cost: 10, sgst_rate: 9, cgst_rate: 9, igst_rate: 18, selling_price: 15 }],
     });
     assert.equal(res.status, 400);
     assert.match(res.body.error, /both IGST and SGST\/CGST/);
@@ -103,27 +112,31 @@ describe('purchases', () => {
     const item = await makeItem();
     const bad = (line: Record<string, unknown>) => admin.post('/api/purchases', {
       supplier_name: 'Wholesale Co',
-      items: [{ item_id: item.id, quantity: 1, unit_cost: 10, sgst_rate: 0, cgst_rate: 0, igst_rate: 0, ...line }],
+      items: [{ item_id: item.id, quantity: 1, unit_cost: 10, sgst_rate: 0, cgst_rate: 0, igst_rate: 0, selling_price: 15, ...line }],
     });
     assert.equal((await bad({ quantity: 0 })).status, 400);
     assert.equal((await bad({ quantity: -5 })).status, 400);
     assert.equal((await bad({ unit_cost: -1 })).status, 400);
     assert.equal((await bad({ sgst_rate: 60, cgst_rate: 60 })).status, 400);
     assert.equal((await bad({ quantity: 'abc' })).status, 400);
+    // Every line must say what the stock will sell for.
+    assert.equal((await bad({ selling_price: undefined })).status, 400);
+    assert.equal((await bad({ selling_price: 0 })).status, 400);
+    assert.equal((await bad({ selling_price: -5 })).status, 400);
   });
 
   it('rejects a purchase with no items or an unknown item', async () => {
     assert.equal((await admin.post('/api/purchases', { supplier_name: 'X', items: [] })).status, 400);
     assert.equal((await admin.post('/api/purchases', {
       supplier_name: 'X',
-      items: [{ item_id: 987654321, quantity: 1, unit_cost: 1 }],
+      items: [{ item_id: 987654321, quantity: 1, unit_cost: 1, selling_price: 2 }],
     })).status, 400);
   });
 
   it('requires a supplier name', async () => {
     const item = await makeItem();
     assert.equal((await admin.post('/api/purchases', {
-      items: [{ item_id: item.id, quantity: 1, unit_cost: 1 }],
+      items: [{ item_id: item.id, quantity: 1, unit_cost: 1, selling_price: 2 }],
     })).status, 400);
   });
 
@@ -132,7 +145,7 @@ describe('purchases', () => {
     assert.equal((await admin.post('/api/purchases', {
       supplier_name: 'Brand New Supplier',
       supplier_phone: '9800000009',
-      items: [{ item_id: item.id, quantity: 1, unit_cost: 10, sgst_rate: 0, cgst_rate: 0, igst_rate: 0 }],
+      items: [{ item_id: item.id, quantity: 1, unit_cost: 10, sgst_rate: 0, cgst_rate: 0, igst_rate: 0, selling_price: 15 }],
     })).status, 201);
 
     const suppliers = (await admin.get('/api/suppliers')).body;
@@ -146,8 +159,8 @@ describe('purchases', () => {
     const res = await admin.post('/api/purchases', {
       supplier_name: 'Wholesale Co',
       items: [
-        { item_id: good.id, quantity: 5, unit_cost: 10, sgst_rate: 0, cgst_rate: 0, igst_rate: 0 },
-        { item_id: 987654321, quantity: 5, unit_cost: 10, sgst_rate: 0, cgst_rate: 0, igst_rate: 0 },
+        { item_id: good.id, quantity: 5, unit_cost: 10, sgst_rate: 0, cgst_rate: 0, igst_rate: 0, selling_price: 15 },
+        { item_id: 987654321, quantity: 5, unit_cost: 10, sgst_rate: 0, cgst_rate: 0, igst_rate: 0, selling_price: 15 },
       ],
     });
     assert.equal(res.status, 400);
@@ -192,6 +205,27 @@ describe('reports', () => {
     for (const field of ['purchase_number', 'supplier_name', 'item_name', 'unit_cost', 'sgst_rate', 'cgst_rate', 'igst_rate', 'sgst_amount', 'cgst_amount', 'igst_amount', 'total_amount']) {
       assert.ok(field in row, `purchase report row is missing ${field}`);
     }
+  });
+
+  it("keeps each line's selling price and profit % for the report download", async () => {
+    // Profit is the margin on the cost before GST. 70.80 incl. 18% GST is
+    // 60.00, which on a cost of 50.00 is 20%. It is worked out and stored on
+    // save; the purchase screen never shows it.
+    const fields = itemFields();
+    const id = await purchaseNewItem(admin, fields, { quantity: 10, unit_cost: 50, selling_price: 70.8 });
+    // Bought again dearer, and priced by the owner below the new cost:
+    // 59.00 incl. 18% is 50.00, half the cost of 100.
+    assert.equal((await admin.post('/api/purchases', {
+      supplier_name: 'Test Supplier',
+      items: [{ item_id: id, quantity: 5, unit_cost: 100, selling_price: 59, ...lineRates(fields) }],
+    })).status, 201);
+
+    const rows = (await admin.get('/api/reports/purchase-items')).body.data.filter((row: any) => row.item_id === id);
+    assert.deepEqual(
+      rows.map((row: any) => [row.unit_cost, row.selling_price, row.profit_percent]),
+      [[100, 59, -50], [50, 70.8, 20]],
+      'newest first, each line with its own price and margin'
+    );
   });
 
   it('honours an explicit date range', async () => {

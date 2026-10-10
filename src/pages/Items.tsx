@@ -1,5 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
+import { useDataStore } from '../store/useDataStore';
+import { StockPanel } from '../components/StockPanel';
+import { UNIT_OPTIONS } from '../lib/units';
 import { api } from '../api';
 import { 
   Search, 
@@ -10,6 +14,8 @@ import {
   AlertCircle, 
   X,
   Save,
+  Layers,
+  Truck,
   Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -27,6 +33,9 @@ export const Items = () => {
   // the catalogue was simply unfindable at the till until a reload.
   const [rows, setRows] = useState<Item[]>([]);
   const isAdmin = user?.role === 'admin';
+  // The item whose batches are open in the stock panel.
+  const [stockItem, setStockItem] = useState<Item | null>(null);
+  const refreshItems = useDataStore((state) => state.refreshItems);
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
@@ -107,8 +116,15 @@ export const Items = () => {
     e.preventDefault();
     const gstMode = formData.gst_mode || 'split';
     const gstRate = Number(formData.gst_rate || 0);
+    // Catalogue details only. Price and stock live in batches: they change
+    // through purchases, sales, and stock adjustments with a reason.
     const normalizedForm = {
-      ...formData,
+      name: formData.name,
+      hsn_code: formData.hsn_code,
+      metric: formData.metric,
+      is_loose: formData.is_loose,
+      gst_applicable: formData.gst_applicable,
+      image_url: formData.image_url,
       gst_mode: gstMode,
       gst_rate: gstRate,
       sgst_rate: formData.gst_applicable ? (gstMode === 'split' ? gstRate / 2 : 0) : 0,
@@ -116,11 +132,8 @@ export const Items = () => {
       igst_rate: formData.gst_applicable ? (gstMode === 'igst' ? gstRate : 0) : 0,
     };
     try {
-      if (editingItem) {
-        await api.updateItem(editingItem.id, normalizedForm);
-      } else {
-        await api.addItem(normalizedForm);
-      }
+      if (!editingItem) return;
+      await api.updateItem(editingItem.id, normalizedForm);
       setShowModal(false);
       // Re-read rather than splicing the form values into the list: the server
       // normalises and bounds what it stores, so the row on screen should be
@@ -155,14 +168,17 @@ export const Items = () => {
             className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
           />
         </div>
+        {/* Items are created on the Purchases screen, where their selling
+            price and first stock are entered together. */}
         {isAdmin && (
-          <button
-            onClick={() => handleOpenModal()}
+          <Link
+            to="/purchases"
             className="flex items-center gap-2 px-6 py-3 bg-orange-600 text-white font-bold rounded-2xl shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all"
+            title="New items are added with their first purchase"
           >
-            <Plus size={20} />
-            Add New Item
-          </button>
+            <Truck size={20} />
+            Add items via Purchases
+          </Link>
         )}
       </div>
 
@@ -188,7 +204,7 @@ export const Items = () => {
                 {search ? (
                   <p className="text-sm">Try searching for something else</p>
                 ) : (
-                  <p className="text-sm">Items will appear here once added</p>
+                  <p className="text-sm">Items appear here once they are purchased</p>
                 )}
               </>
             )}
@@ -231,8 +247,11 @@ export const Items = () => {
 
             <div className="flex items-center justify-between pt-4 border-t border-gray-50">
               <div>
-                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">Total Cost</p>
-                <p className="text-lg font-black text-orange-600">₹{item.price.toFixed(2)}</p>
+                {/* The price the next unit sells at: the oldest batch's. */}
+                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">Selling Price</p>
+                <p className="text-lg font-black text-orange-600">
+                  {item.price > 0 ? `₹${item.price.toFixed(2)}` : '—'}
+                </p>
               </div>
               <div className="text-right">
                 <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">Stock</p>
@@ -248,9 +267,17 @@ export const Items = () => {
             {item.stock_quantity < 10 && (
               <div className="mt-4 flex items-center gap-2 text-xs font-bold text-red-500 bg-red-50 px-3 py-2 rounded-xl">
                 <AlertCircle size={14} />
-                LOW STOCK ALERT
+                {item.stock_quantity <= 0 ? 'OUT OF STOCK' : 'LOW STOCK ALERT'}
               </div>
             )}
+
+            <button
+              onClick={() => setStockItem(item)}
+              className="mt-4 w-full flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:bg-gray-100"
+            >
+              <Layers size={14} />
+              Stock &amp; prices
+            </button>
           </motion.div>
         )))}
       </div>
@@ -296,7 +323,7 @@ export const Items = () => {
             >
               <form onSubmit={handleSubmit}>
                 <div className="p-8 border-b border-gray-100 flex items-center justify-between">
-                  <h3 className="font-bold text-2xl">{editingItem ? 'Edit Item' : 'Add New Item'}</h3>
+                  <h3 className="font-bold text-2xl">Edit Item</h3>
                   <button type="button" onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-100 rounded-full">
                     <X size={24} />
                   </button>
@@ -326,16 +353,14 @@ export const Items = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">Total Cost (Incl. GST) (₹)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={formData.price || ''}
-                      onFocus={(e) => e.target.select()}
-                      onChange={(e) => setFormData({ ...formData, price: e.target.value === '' ? 0 : Number(e.target.value) })}
-                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
-                      required
-                    />
+                    <label className="text-sm font-bold text-gray-700">Selling Price &amp; Stock</label>
+                    <p className="px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm text-gray-600">
+                      {editingItem && editingItem.price > 0 ? `₹${editingItem.price.toFixed(2)}` : 'No price yet'} ·{' '}
+                      {editingItem?.stock_quantity ?? 0} {editingItem?.metric} in stock
+                      <span className="block text-xs text-gray-400 mt-1">
+                        Set on purchases. Change them under Stock &amp; prices.
+                      </span>
+                    </p>
                   </div>
 
                   <div className="space-y-2">
@@ -345,23 +370,14 @@ export const Items = () => {
                       onChange={(e) => setFormData({ ...formData, metric: e.target.value })}
                       className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                     >
-                      <option value="piece">Piece</option>
-                      <option value="kg">KG</option>
-                      <option value="packet">Packet</option>
-                      <option value="box">Box</option>
+                      {UNIT_OPTIONS.map((unit) => (
+                        <option key={unit.value} value={unit.value}>{unit.label}</option>
+                      ))}
+                      {/* An older item may use a unit no longer offered. */}
+                      {formData.metric && !UNIT_OPTIONS.some((unit) => unit.value === formData.metric) && (
+                        <option value={formData.metric}>{formData.metric}</option>
+                      )}
                     </select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">Stock Quantity</label>
-                    <input
-                      type="number"
-                      value={formData.stock_quantity || ''}
-                      onFocus={(e) => e.target.select()}
-                      onChange={(e) => setFormData({ ...formData, stock_quantity: e.target.value === '' ? 0 : Number(e.target.value) })}
-                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
-                      required
-                    />
                   </div>
 
                   <div className="space-y-2">
@@ -429,7 +445,7 @@ export const Items = () => {
                     className="flex-1 py-4 bg-orange-600 text-white font-bold rounded-2xl shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all flex items-center justify-center gap-2"
                   >
                     <Save size={20} />
-                    {editingItem ? 'Update Item' : 'Save Item'}
+                    Update Item
                   </button>
                 </div>
               </form>
@@ -437,6 +453,18 @@ export const Items = () => {
           </div>
         )}
       </AnimatePresence>
+
+      {stockItem && (
+        <StockPanel
+          item={stockItem}
+          isAdmin={isAdmin}
+          onClose={() => setStockItem(null)}
+          onChanged={() => {
+            void reload();
+            void refreshItems();
+          }}
+        />
+      )}
     </div>
   );
 };
