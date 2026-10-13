@@ -6,7 +6,8 @@ import { createServer as createViteServer } from 'vite';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
-import db, { initDb, syncItemStock } from './db/index';
+import db, { dbPath, initDb, syncItemStock } from './db/index';
+import { createGoogleDrive } from './server/googleDrive';
 import { readPool } from './db/asyncRead';
 // The same arithmetic the till runs, so the screen and the ledger cannot
 // disagree. See src/lib/billMath.ts.
@@ -613,6 +614,24 @@ const BACKUP_KEEP_DAYS = Math.max(1, Number(process.env.BACKUP_KEEP_DAYS) || 30)
 const MANUAL_BACKUP_PREFIX = 'vyaparabilling-backup-';
 const AUTO_BACKUP_PREFIX = 'vyaparabilling-auto-';
 
+// Google Drive (server/googleDrive.ts). Set up with GOOGLE_CLIENT_ID,
+// GOOGLE_CLIENT_SECRET and PUBLIC_URL; connected once from Settings. The
+// connection is kept in google-drive.json beside the database.
+const googleDrive = createGoogleDrive({
+  stateFile: path.join(path.dirname(dbPath), 'google-drive.json'),
+  publicUrl: process.env.PUBLIC_URL || null,
+});
+
+/** Upload a backup to Google Drive if connected, and tidy old automatic ones there. */
+const sendBackupToDrive = async (filePath: string) => {
+  if (!googleDrive.isConnected()) return null;
+  const uploaded = await googleDrive.uploadBackup(filePath);
+  await googleDrive.pruneBackups(BACKUP_KEEP_DAYS, AUTO_BACKUP_PREFIX).catch((err) => {
+    console.error('[backup] could not tidy old Google Drive backups:', err.message);
+  });
+  return uploaded;
+};
+
 const createLocalBackup = (kind: 'manual' | 'auto' = 'manual') => {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const fileName = `${kind === 'auto' ? AUTO_BACKUP_PREFIX : MANUAL_BACKUP_PREFIX}${timestamp}.db`;
@@ -677,6 +696,9 @@ const runAutoBackupIfDue = () => {
     const result = createLocalBackup('auto');
     console.log(`[backup] automatic backup ${result.fileName}${result.copiedTo ? `, copied to ${BACKUP_COPY_DIR}` : ''}`);
     pruneAutoBackups();
+    sendBackupToDrive(result.filePath)
+      .then((uploaded) => uploaded && console.log(`[backup] uploaded ${uploaded.name} to Google Drive`))
+      .catch((err) => console.error('[backup] Google Drive upload failed:', err.message));
   } catch (err: any) {
     console.error('[backup] automatic backup failed:', err.message);
   }
@@ -822,7 +844,7 @@ app.get('/api/settings', authenticateToken, (_req, res) => {
   res.json(settings);
 });
 
-app.get('/api/backups/local/status', authenticateToken, requireAdmin, (req, res) => {
+app.get('/api/backups/local/status', authenticateToken, requireAdmin, (_req, res) => {
   const backups = listBackups(BACKUP_DIR);
   const lastAuto = backups.find((file) => file.name.startsWith(AUTO_BACKUP_PREFIX));
   res.json({
@@ -975,27 +997,82 @@ app.put('/api/admin/account', authenticateToken, requireAdmin, route((req, res) 
   });
 }));
 
-app.post('/api/backups/local', authenticateToken, requireAdmin, (req, res) => {
+app.post('/api/backups/local', authenticateToken, requireAdmin, async (req, res) => {
+  let result: ReturnType<typeof createLocalBackup>;
   try {
-    const result = createLocalBackup();
-    writeAuditLog({
-      user: req.user,
-      action: 'backup',
-      entityType: 'system',
-      entityId: result.fileName,
-      details: `Created local backup ${result.fileName}`,
-    });
-    res.json({
-      success: true,
-      ...result,
-    });
+    result = createLocalBackup();
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Failed to create local backup' });
+    return;
+  }
+  // The local backup is done whatever happens with Drive; report both.
+  let drive: { uploaded: boolean; name?: string; error?: string } | null = null;
+  if (googleDrive.isConnected()) {
+    try {
+      const uploaded = await sendBackupToDrive(result.filePath);
+      drive = { uploaded: true, name: uploaded?.name };
+    } catch (err: any) {
+      drive = { uploaded: false, error: err.message || 'Upload failed' };
+    }
+  }
+  writeAuditLog({
+    user: req.user,
+    action: 'backup',
+    entityType: 'system',
+    entityId: result.fileName,
+    details: `Created local backup ${result.fileName}` +
+      (drive ? (drive.uploaded ? '; uploaded to Google Drive' : `; Google Drive upload failed: ${drive.error}`) : ''),
+  });
+  res.json({ success: true, ...result, drive });
+});
+
+// --- Google Drive backups ---
+
+app.get('/api/backups/google/status', authenticateToken, requireAdmin, (_req, res) => {
+  res.json(googleDrive.status());
+});
+
+/** Start connecting: the browser is sent to Google to sign in and allow access. */
+app.post('/api/backups/google/connect', authenticateToken, requireAdmin, route((_req, res) => {
+  if (!googleDrive.configured) {
+    fail('Google Drive is not set up on the server yet. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and PUBLIC_URL to .env and restart.');
+  }
+  res.json({ url: googleDrive.authorizationUrl() });
+}));
+
+/**
+ * Where Google sends the browser back. Not behind the app's sign-in (it is a
+ * plain redirect, with no bearer token); it is trusted only with the one-time
+ * `state` an admin's connect request created moments before.
+ */
+app.get('/api/backups/google/callback', async (req, res) => {
+  const back = (query: string) => res.redirect(`/settings?${query}`);
+  const code = typeof req.query.code === 'string' ? req.query.code : '';
+  const state = typeof req.query.state === 'string' ? req.query.state : '';
+  if (req.query.error) return back(`drive=error&reason=${encodeURIComponent(String(req.query.error))}`);
+  if (!code || !state) return back('drive=error&reason=missing_code');
+  try {
+    const connected = await googleDrive.completeConnection(code, state);
+    console.log(`[backup] Google Drive connected${connected.email ? ` (${connected.email})` : ''}`);
+    return back('drive=connected');
+  } catch (err: any) {
+    console.error('[backup] Google Drive connection failed:', err.message);
+    return back(`drive=error&reason=${encodeURIComponent(err.message || 'failed')}`);
   }
 });
 
+app.post('/api/backups/google/disconnect', authenticateToken, requireAdmin, route(async (req, res) => {
+  const email = googleDrive.status().email;
+  await googleDrive.disconnect();
+  writeAuditLog({
+    user: req.user, action: 'update', entityType: 'system', entityId: 'google-drive',
+    details: `Disconnected Google Drive backups${email ? ` (${email})` : ''}`,
+  });
+  res.json({ success: true });
+}));
+
 // --- Cashier Routes ---
-app.get('/api/cashiers', authenticateToken, requireAdmin, (req, res) => {
+app.get('/api/cashiers', authenticateToken, requireAdmin, (_req, res) => {
   const cashiers = db.prepare(`
     SELECT id, username, role, name, is_active
     FROM users
@@ -1938,7 +2015,7 @@ app.get('/api/sales-credit', authenticateToken, route((_req, res) => {
 }));
 
 // --- Supplier Routes ---
-app.get('/api/suppliers', authenticateToken, requireAdmin, (req, res) => {
+app.get('/api/suppliers', authenticateToken, requireAdmin, (_req, res) => {
   // What the shop owes each supplier, for the Suppliers page and the
   // Purchases supplier picker.
   const suppliers = db.prepare(`
@@ -2070,6 +2147,10 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
   // and another sale can use up a batch between the item going into the cart
   // and the bill being saved — so without this check the customer could be
   // charged a different amount from the one on screen.
+  // Queue the bill for the counter's receipt printer — how a bill saved on a
+  // phone gets printed at the counter. In the same transaction as the bill.
+  const printAtCounter = req.body?.print_at_counter === true;
+
   const expectedTotal =
     req.body?.expected_total == null || req.body?.expected_total === ''
       ? null
@@ -2272,7 +2353,12 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
       });
     }
 
-    return { bill_id, bill_number, subtotal_amount, tax_amount, total_amount };
+    const print_job_id = printAtCounter
+      ? Number(db.prepare('INSERT INTO print_jobs (bill_id, requested_by, requested_by_name) VALUES (?, ?, ?)')
+          .run(bill_id, req.user.id, req.user.name).lastInsertRowid)
+      : null;
+
+    return { bill_id, bill_number, subtotal_amount, tax_amount, total_amount, print_job_id };
   });
 
   const result = transaction();
@@ -2458,6 +2544,7 @@ app.delete('/api/bills/:id', authenticateToken, requireAdmin, route((req, res) =
       DELETE FROM bill_item_batches WHERE bill_item_id IN (SELECT id FROM bill_items WHERE bill_id = ?)
     `).run(id);
     db.prepare('DELETE FROM bill_items WHERE bill_id = ?').run(id);
+    db.prepare('DELETE FROM print_jobs WHERE bill_id = ?').run(id);
     db.prepare('DELETE FROM bills WHERE id = ?').run(id);
 
     return { lineCount: lines.length, itemCount: touchedItems.size };
@@ -2477,6 +2564,133 @@ app.delete('/api/bills/:id', authenticateToken, requireAdmin, route((req, res) =
       `stock returned for ${lineCount} line${lineCount === 1 ? '' : 's'}${credit}`,
   });
   res.json({ success: true, bill_number: bill.bill_number, items_restocked: itemCount });
+}));
+
+// --- Quick Bill (the phone app) ---
+
+/**
+ * The items a cashier is most likely to want next, so a phone bill rarely
+ * needs typing: what this customer usually buys (last 180 days, most often
+ * bought first), and the shop's best sellers (last 30 days). Items out of
+ * stock are still listed, flagged, so a regular order is not silently short.
+ */
+app.get('/api/quick-items', authenticateToken, route(async (req, res) => {
+  const customerId = optRowId(req.query.customer_id, 'Customer');
+  const limit = num(req.query.limit, 'limit', { min: 1, max: 50, fallback: 12 });
+  const columns = ITEM_LIST_COLUMNS.split(',').map((column) => `i.${column.trim()}`).join(', ');
+
+  const [usual, popular] = await Promise.all([
+    customerId
+      ? readPool.all(`
+          SELECT ${columns}, COUNT(DISTINCT b.id) AS times_bought, ROUND(SUM(bi.quantity), 3) AS total_quantity
+          FROM bill_items bi
+          JOIN bills b ON b.id = bi.bill_id
+          JOIN items i ON i.id = bi.item_id
+          WHERE b.customer_id = ? AND b.created_at >= datetime('now', '-180 days')
+          GROUP BY i.id
+          ORDER BY times_bought DESC, total_quantity DESC, lower(i.name) ASC
+          LIMIT ?`, [customerId, limit])
+      : Promise.resolve([]),
+    readPool.all(`
+      SELECT ${columns}, COUNT(DISTINCT b.id) AS times_bought, ROUND(SUM(bi.quantity), 3) AS total_quantity
+      FROM bill_items bi
+      JOIN bills b ON b.id = bi.bill_id
+      JOIN items i ON i.id = bi.item_id
+      WHERE b.created_at >= datetime('now', '-30 days')
+      GROUP BY i.id
+      ORDER BY times_bought DESC, total_quantity DESC, lower(i.name) ASC
+      LIMIT ?`, [limit]),
+  ]);
+
+  res.json({ usual, popular });
+}));
+
+/**
+ * A customer's most recent bill, item by item (a line split across batches is
+ * one item again), with each item as it is now — so "repeat last order" can
+ * put the same quantities in a new bill at today's prices.
+ */
+app.get('/api/customers/:id/last-order', authenticateToken, route((req, res) => {
+  const id = rowId(req.params.id);
+  const bill = db.prepare(`
+    SELECT id, bill_number, created_at, total_amount FROM bills
+    WHERE customer_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
+  `).get(id) as any;
+  if (!bill) {
+    res.json({ bill: null, items: [] });
+    return;
+  }
+  const columns = ITEM_LIST_COLUMNS.split(',').map((column) => `i.${column.trim()}`).join(', ');
+  const items = db.prepare(`
+    SELECT ${columns}, ROUND(SUM(bi.quantity), 3) AS ordered_quantity
+    FROM bill_items bi JOIN items i ON i.id = bi.item_id
+    WHERE bi.bill_id = ?
+    GROUP BY i.id
+    ORDER BY MIN(bi.id)
+  `).all(bill.id);
+  res.json({ bill, items });
+}));
+
+// --- Counter print queue ---
+//
+// Phones cannot reach the counter's receipt printer, so a phone bill is
+// queued and the counter computer prints it. See print_jobs in db/index.ts.
+
+/** Queue a bill (again) for the counter printer: a reprint from a phone. */
+app.post('/api/bills/:id/print-requests', authenticateToken, route((req, res) => {
+  const billId = rowId(req.params.id);
+  if (!db.prepare('SELECT 1 FROM bills WHERE id = ?').get(billId)) {
+    res.status(404).json({ error: 'Bill not found' });
+    return;
+  }
+  const pending = db.prepare("SELECT id FROM print_jobs WHERE bill_id = ? AND status = 'pending'").get(billId) as any;
+  const id = pending?.id ?? Number(db.prepare(
+    'INSERT INTO print_jobs (bill_id, requested_by, requested_by_name) VALUES (?, ?, ?)'
+  ).run(billId, req.user.id, req.user.name).lastInsertRowid);
+  res.status(201).json({ id, status: 'pending' });
+}));
+
+/** Bills waiting for the counter printer, oldest first. Polled by the print station. */
+app.get('/api/print-jobs', authenticateToken, route((_req, res) => {
+  const jobs = db.prepare(`
+    SELECT j.id, j.bill_id, j.status, j.requested_by_name, j.created_at, b.bill_number
+    FROM print_jobs j JOIN bills b ON b.id = j.bill_id
+    WHERE j.status = 'pending'
+      -- A job nobody printed within a day is stale: the bill was long since
+      -- handed over. Reprint it from History if it is still wanted.
+      AND j.created_at >= datetime('now', '-1 day')
+    ORDER BY j.created_at ASC, j.id ASC
+    LIMIT 20
+  `).all();
+  res.json({ data: jobs });
+}));
+
+/** Whether a queued bill has been printed yet, for the phone that sent it. */
+app.get('/api/print-jobs/:id', authenticateToken, route((req, res) => {
+  const job = db.prepare('SELECT id, bill_id, status, created_at, printed_at, printed_by_name FROM print_jobs WHERE id = ?')
+    .get(rowId(req.params.id));
+  if (!job) {
+    res.status(404).json({ error: 'Print job not found' });
+    return;
+  }
+  res.json(job);
+}));
+
+/**
+ * The print station takes a job. Marked printed in the same step, and only
+ * if still pending, so with two counter computers open each bill prints once.
+ */
+app.post('/api/print-jobs/:id/claim', authenticateToken, route((req, res) => {
+  const id = rowId(req.params.id);
+  const claimed = db.prepare(`
+    UPDATE print_jobs SET status = 'printed', printed_at = CURRENT_TIMESTAMP, printed_by_name = ?
+    WHERE id = ? AND status = 'pending'
+  `).run(req.user.name, id);
+  if (claimed.changes === 0) {
+    res.status(409).json({ error: 'Already printed', code: 'ALREADY_PRINTED' });
+    return;
+  }
+  res.json({ id, status: 'printed' });
 }));
 
 // --- Purchase Routes ---
@@ -3426,7 +3640,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

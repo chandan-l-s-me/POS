@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { AuditLog } from '../types';
 import { Search, Shield, Activity } from 'lucide-react';
@@ -81,6 +81,7 @@ export const Logs = () => {
       </div>
 
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-left">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
@@ -129,6 +130,7 @@ export const Logs = () => {
             )}
           </tbody>
         </table>
+        </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-6 py-4">
           <p className="text-sm text-gray-500">

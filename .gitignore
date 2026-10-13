@@ -20,3 +20,7 @@ coverage/
 *.db-wal
 *.db-shm
 /backups/
+
+# Google Drive connection (refresh token) for backups — a credential.
+google-drive.json
+google-drive.json.tmp

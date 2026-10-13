@@ -29,6 +29,7 @@ import { useThemeStore } from '../store/useThemeStore';
 import { useFullscreen } from '../hooks/useFullscreen';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
+import { PrintStation } from './PrintStation';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -43,7 +44,11 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   // anything, so the header title below kept showing the previous page's name
   // until some unrelated state change forced a re-render.
   const location = useLocation();
+  // Docked sidebar (1024px and wider): expanded or collapsed to icons.
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
+  // Narrower screens (tablets, phones): the menu is a drawer, closed by default.
+  const [isDrawerOpen, setIsDrawerOpen] = React.useState(false);
+  React.useEffect(() => setIsDrawerOpen(false), [location.pathname]);
   // The status badge used to be a hardcoded green dot reading "Offline Mode
   // Active" — it said the same thing whether or not the browser could reach
   // anything, which is worse than no indicator on a till that must not keep
@@ -107,107 +112,141 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   const filteredNavItems = navItems.filter(item => item.roles.includes(user?.role || ''));
 
+  // The menu itself, shared by the docked sidebar and the drawer. `expanded`
+  // shows labels; the docked sidebar can collapse to icons only.
+  const renderMenu = (expanded: boolean, onClose: () => void, closeIcon: React.ReactNode) => (
+    <>
+      <div className="px-5 py-4 flex items-center justify-between shrink-0">
+        <AnimatePresence mode="wait">
+          {expanded && (
+            <motion.h1
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="text-xl font-bold text-orange-600 tracking-tight"
+            >
+              Vypar<span className="text-gray-900">POS</span>
+            </motion.h1>
+          )}
+        </AnimatePresence>
+        <button
+          onClick={onClose}
+          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+          aria-label={expanded ? 'Collapse menu' : 'Expand menu'}
+        >
+          {closeIcon}
+        </button>
+      </div>
+
+      {/* Scrolls, so every page stays reachable on a short screen. */}
+      <nav className="flex-1 min-h-0 overflow-y-auto px-3 space-y-1">
+        {filteredNavItems.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            title={expanded ? undefined : item.label}
+            className={({ isActive }) =>
+              cn(
+                "flex items-center gap-4 px-4 py-2.5 rounded-xl transition-all duration-200 group",
+                !expanded && "justify-center px-0",
+                isActive
+                  ? "bg-orange-50 text-orange-600 font-medium shadow-sm"
+                  : "text-gray-500 hover:bg-gray-100 hover:text-gray-900"
+              )
+            }
+          >
+            <item.icon size={21} className="min-w-[21px]" />
+            {expanded && <span className="whitespace-nowrap">{item.label}</span>}
+          </NavLink>
+        ))}
+      </nav>
+
+      <div className="p-3 border-t border-gray-100 shrink-0">
+        <div className={cn("flex items-center gap-3 px-3 py-2", !expanded && "justify-center px-0")}>
+          <div className="w-9 h-9 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-bold shrink-0">
+            {user?.name?.[0]?.toUpperCase() || '?'}
+          </div>
+          {expanded && (
+            <div className="overflow-hidden">
+              <p className="text-sm font-semibold truncate">{user?.name || 'User'}</p>
+              <p className="text-xs text-gray-500 capitalize">{user?.role || 'Role'}</p>
+              <div className="flex gap-2 mt-1">
+                <span className="text-[10px] bg-gray-100 px-1 rounded text-gray-400">Items: {stats.items}</span>
+                <span className="text-[10px] bg-gray-100 px-1 rounded text-gray-400">Cust: {stats.customers}</span>
+              </div>
+            </div>
+          )}
+        </div>
+        <button
+          onClick={handleLogout}
+          title={expanded ? undefined : 'Logout'}
+          className={cn(
+            "w-full flex items-center gap-4 px-4 py-2.5 mt-1 rounded-xl text-red-500 hover:bg-red-50 transition-all",
+            !expanded && "justify-center px-0"
+          )}
+        >
+          <LogOut size={21} className="min-w-[21px]" />
+          {expanded && <span>Logout</span>}
+        </button>
+      </div>
+    </>
+  );
+
   return (
-    <div className="flex h-screen bg-gray-50 text-gray-900 overflow-hidden">
-      {/* Sidebar */}
+    <div className="flex h-screen h-[100dvh] bg-gray-50 text-gray-900 overflow-hidden">
+      {/* Docked sidebar: 1024px and wider. */}
       <motion.aside
         initial={false}
-        animate={{ width: isSidebarOpen ? 260 : 80 }}
-        className="bg-white border-r border-gray-200 flex flex-col shadow-sm z-20"
+        animate={{ width: isSidebarOpen ? 248 : 76 }}
+        className="hidden lg:flex bg-white border-r border-gray-200 flex-col shadow-sm z-20 shrink-0"
       >
-        <div className="p-6 flex items-center justify-between">
-          <AnimatePresence mode="wait">
-            {isSidebarOpen && (
-              <motion.h1
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="text-xl font-bold text-orange-600 tracking-tight"
-              >
-                Vypar<span className="text-gray-900">POS</span>
-              </motion.h1>
-            )}
-          </AnimatePresence>
-          <button
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
-          </button>
-        </div>
-
-        <nav className="flex-1 px-4 space-y-2">
-          {filteredNavItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200 group",
-                  isActive 
-                    ? "bg-orange-50 text-orange-600 font-medium shadow-sm" 
-                    : "text-gray-500 hover:bg-gray-100 hover:text-gray-900"
-                )
-              }
-            >
-              <item.icon size={22} className={cn("min-w-[22px]")} />
-              <AnimatePresence mode="wait">
-                {isSidebarOpen && (
-                  <motion.span
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -10 }}
-                    className="whitespace-nowrap"
-                  >
-                    {item.label}
-                  </motion.span>
-                )}
-              </AnimatePresence>
-            </NavLink>
-          ))}
-        </nav>
-
-        <div className="p-4 border-t border-gray-100">
-          <div className={cn("flex items-center gap-4 px-4 py-3", !isSidebarOpen && "justify-center")}>
-            <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-bold shrink-0">
-              {user?.name?.[0]?.toUpperCase() || '?'}
-            </div>
-            {isSidebarOpen && (
-              <div className="overflow-hidden">
-                <p className="text-sm font-semibold truncate">{user?.name || 'User'}</p>
-                <p className="text-xs text-gray-500 capitalize">{user?.role || 'Role'}</p>
-                <div className="flex gap-2 mt-1">
-                  <span className="text-[10px] bg-gray-100 px-1 rounded text-gray-400">Items: {stats.items}</span>
-                  <span className="text-[10px] bg-gray-100 px-1 rounded text-gray-400">Cust: {stats.customers}</span>
-                </div>
-              </div>
-            )}
-          </div>
-          <button
-            onClick={handleLogout}
-            className={cn(
-              "w-full flex items-center gap-4 px-4 py-3 mt-2 rounded-xl text-red-500 hover:bg-red-50 transition-all",
-              !isSidebarOpen && "justify-center"
-            )}
-          >
-            <LogOut size={22} className="min-w-[22px]" />
-            {isSidebarOpen && <span>Logout</span>}
-          </button>
-        </div>
+        {renderMenu(isSidebarOpen, () => setIsSidebarOpen(!isSidebarOpen), isSidebarOpen ? <X size={20} /> : <Menu size={20} />)}
       </motion.aside>
 
+      {/* Drawer: narrower screens. */}
+      <AnimatePresence>
+        {isDrawerOpen && (
+          <div className="lg:hidden fixed inset-0 z-50 flex">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/30"
+              onClick={() => setIsDrawerOpen(false)}
+            />
+            <motion.aside
+              initial={{ x: -280 }}
+              animate={{ x: 0 }}
+              exit={{ x: -280 }}
+              transition={{ type: 'tween', duration: 0.2 }}
+              className="relative flex w-[272px] max-w-[85vw] flex-col bg-white shadow-xl"
+            >
+              {renderMenu(true, () => setIsDrawerOpen(false), <X size={20} />)}
+            </motion.aside>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-8 shadow-sm shrink-0">
-          <div className="flex items-center gap-4">
-            <h2 className="text-lg font-semibold text-gray-700">
+      <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        <PrintStation />
+        <header className="h-14 sm:h-16 bg-white border-b border-gray-200 flex items-center justify-between gap-3 px-3 sm:px-6 lg:px-8 shadow-sm shrink-0">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+            <button
+              onClick={() => setIsDrawerOpen(true)}
+              className="lg:hidden p-2 -ml-1 rounded-lg text-gray-600 hover:bg-gray-100"
+              aria-label="Open menu"
+            >
+              <Menu size={22} />
+            </button>
+            <h2 className="truncate text-lg font-semibold text-gray-700">
               {/* Exact match first; then a section's nested pages, so a
                   customer's passbook at /customers/12 is titled Customers. */}
               {(navItems.find(item => item.to === location.pathname) ??
                 navItems.find(item => item.to !== '/' && location.pathname.startsWith(`${item.to}/`)))?.label || 'POS'}
             </h2>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-4">
             {canFullscreen && (
               <button
                 onClick={() => void toggleFullscreen()}
@@ -236,11 +275,11 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
               title={isOnline ? 'Connected to the till server' : 'No connection to the till server'}
             >
               <div className={cn("w-2 h-2 rounded-full", isOnline ? "bg-green-500 animate-pulse" : "bg-red-500")} />
-              {isOnline ? 'Connected' : 'Offline'}
+              <span className="hidden sm:inline">{isOnline ? 'Connected' : 'Offline'}</span>
             </div>
           </div>
         </header>
-        <div className="flex-1 overflow-auto p-8">
+        <div className="flex-1 overflow-auto p-3 sm:p-5 lg:p-8">
           {children}
         </div>
       </main>

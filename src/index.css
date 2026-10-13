@@ -507,3 +507,27 @@ html.dark select option {
 @media print {
   .receipt-paper { background-color: #ffffff !important; color: #000000 !important; }
 }
+
+/* A table inside a sideways-scrolling box keeps a usable width and scrolls,
+   rather than squeezing every column until each cell wraps onto several
+   lines (what happened on phones and narrow tablets). Tables that set their
+   own widths (Billing, Purchases) are wider than this anyway. */
+.overflow-x-auto > table {
+  min-width: 44rem;
+}
+
+/* Codes, headings and dates read badly broken across lines. */
+.overflow-x-auto > table th,
+.overflow-x-auto > table .font-mono,
+.overflow-x-auto > table .tabular-nums {
+  white-space: nowrap;
+}
+
+/* On tablets and phones the roomy desktop cell padding (up to 2rem a side)
+   is what forced columns to wrap; tighten it there. */
+@media (max-width: 1023px) {
+  .overflow-x-auto > table :is(th, td) {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+}

@@ -405,7 +405,6 @@ const seed = db.transaction(() => {
       // Mirrors computeUnitTaxBreakdown in server.ts: price is GST-inclusive.
       const sgstUnit = (item.price * item.sgst_rate) / 100;
       const cgstUnit = (item.price * item.cgst_rate) / 100;
-      const baseUnit = item.price - sgstUnit - cgstUnit;
       const lineSgst = round2(sgstUnit * quantity);
       const lineCgst = round2(cgstUnit * quantity);
       const lineTotal = round2(item.price * quantity);
