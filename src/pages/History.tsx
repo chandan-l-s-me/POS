@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../api';
 import { Bill } from '../types';
 import { useDataStore } from '../store/useDataStore';
@@ -9,7 +9,6 @@ import {
   Printer, 
   ChevronRight, 
   Download,
-  Filter,
   Trash2,
   X
 } from 'lucide-react';
@@ -248,8 +247,8 @@ export const History = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div className="relative w-96">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative w-full sm:w-96">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
           <input
             type="text"
@@ -259,7 +258,7 @@ export const History = () => {
             className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
           />
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setShowDateFilter((current) => !current)}
             className={cn(
@@ -328,6 +327,7 @@ export const History = () => {
       )}
 
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-left">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
@@ -355,7 +355,7 @@ export const History = () => {
                   <td className="px-8 py-4">
                     <span className="font-mono font-bold text-gray-900">{bill.bill_number}</span>
                   </td>
-                  <td className="px-8 py-4 text-sm text-gray-500">
+                  <td className="px-8 py-4 text-sm text-gray-500 whitespace-nowrap">
                     {formatDateTimeInIST(bill.created_at)}
                   </td>
                   <td className="px-8 py-4">
@@ -371,7 +371,7 @@ export const History = () => {
                     </span>
                   </td>
                   <td className="px-8 py-4">
-                    <span className="font-black text-gray-900">₹{bill.total_amount.toFixed(2)}</span>
+                    <span className="font-black text-gray-900 whitespace-nowrap">₹{bill.total_amount.toFixed(2)}</span>
                   </td>
                   <td className="px-8 py-4 text-right">
                     <button 
@@ -386,6 +386,7 @@ export const History = () => {
             )}
           </tbody>
         </table>
+        </div>
 
         {/* Paging controls. `total` comes from a COUNT in the same query, so
             the range shown is the true position in the full history, not just
@@ -427,13 +428,13 @@ export const History = () => {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
               className={cn(
-                "bg-white w-full rounded-3xl shadow-2xl overflow-hidden h-[80vh]",
+                "bg-white w-full rounded-3xl shadow-2xl h-[88vh] lg:h-[80vh] overflow-y-auto lg:overflow-hidden",
                 settings.bill_format === 'standard'
                   ? "max-w-6xl flex flex-col"
-                  : "max-w-5xl flex"
+                  : "max-w-5xl flex flex-col lg:flex-row"
               )}
             >
-              <div className="flex-1 p-8 overflow-auto">
+              <div className="flex-1 p-4 sm:p-8 lg:overflow-auto">
                 <div className="flex items-center justify-between mb-8">
                   <h3 className="font-bold text-2xl">Bill Details</h3>
                   <div className="flex items-center gap-2">
@@ -487,7 +488,7 @@ export const History = () => {
                   </div>
                 )}
 
-                <div className="grid grid-cols-3 gap-8 mb-8">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-8 mb-8">
                   <div>
                     <p className="text-xs font-bold text-gray-400 uppercase mb-1">Bill Info</p>
                     <p className="font-bold text-lg">{selectedBill.bill_number}</p>
@@ -583,7 +584,7 @@ export const History = () => {
                   </div>
                 </div>
               ) : (
-                <div className="w-[26rem] shrink-0 bg-gray-50 border-l border-gray-100 p-6 flex flex-col gap-4 overflow-y-auto">
+                <div className="w-full lg:w-[26rem] shrink-0 bg-gray-50 border-t lg:border-t-0 lg:border-l border-gray-100 p-4 sm:p-6 flex flex-col gap-4 lg:overflow-y-auto">
                   <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 overflow-x-auto">
                     <div ref={receiptRef}>
                       <Receipt billId={selectedBill.id} />

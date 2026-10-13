@@ -81,6 +81,30 @@ is trusted only from loopback). Sign-in is throttled per visitor (5 failures →
 counter is never blocked by remote failures, so nobody can lock the shop out of
 its own till.
 
+### Phone app (Android): Quick Bill
+
+Cashiers can bill on a phone with the **Vyapara Billing** Android app. The app
+is a native shell (Capacitor, in `android/`) that opens the Quick Bill screen
+(`/m`) from the shop server, so it always runs the same billing code as the
+counter — a change to the screen needs only the server updated, not a new APK.
+Quick Bill also works in Chrome on any phone at `https://<your-host>/m`, minus
+Bluetooth printing.
+
+- **Printing.** Each phone chooses in ⚙: *Counter printer* (the bill is queued
+  and the counter computer prints it — turn on **Settings → Print Bills From
+  Phones** there, and start its Chrome with `--kiosk-printing` so no dialog
+  appears), *My Bluetooth printer* (any ESC/POS thermal printer paired in
+  Android's Bluetooth settings, 58 or 80 mm), or *Don't print*.
+- **Build the APK:** `npm run android:build` (needs the Android SDK and JDK 21;
+  see `capacitor.config.ts` for the server address). Output:
+  `android/build.nosync/app/outputs/apk/release/app-release.apk`.
+- **Signing key:** `android/vyapara-release.keystore` and
+  `android/keystore.properties` (both git-ignored). Every update must be signed
+  with this key or phones refuse to install it — **back both up**.
+- **Install on a phone:** copy the APK over (WhatsApp/USB), open it, allow
+  "Install unknown apps" for that one source, install. First open shows the
+  Cloudflare Access email check, then the sign-in page.
+
 ---
 
 ## Full screen / kiosk
@@ -142,6 +166,41 @@ git-ignored, as are `*.db` and `.env`. Keep it that way.
 Schema changes apply automatically on start, in place, and are idempotent —
 starting a newer build against an existing database is the whole upgrade. Take
 a backup first anyway.
+
+### Google Drive backup
+
+Once connected, every backup — the daily automatic one and **Backup Now** — is
+also gzipped and uploaded to a **Vyapara Billing Backups** folder in the
+owner's Google Drive, and automatic ones older than `BACKUP_KEEP_DAYS` are
+removed there too. The app asks only for Google's `drive.file` permission: it
+can see and change the files it uploads, nothing else in the Drive. The
+connection (a refresh token) is kept in `google-drive.json` beside the
+database, not in it, so backups never contain it.
+
+**One-time setup** (about 10 minutes, with the Google account that should hold
+the backups):
+
+1. <https://console.cloud.google.com> → create a project (e.g. "Vyapara Billing").
+2. *APIs & Services → Library* → enable **Google Drive API**.
+3. *APIs & Services → OAuth consent screen* (Google Auth Platform): user type
+   **External**, app name "Vyapara Billing", your email as support and
+   developer contact. Under *Data access* add the scopes `…/auth/drive.file`,
+   `openid` and `email`. Then under *Audience* press **Publish app** ("In
+   production") — while it stays in "Testing", Google expires the connection
+   every 7 days. These scopes need no Google review; on connecting you may see
+   "Google hasn't verified this app": choose *Advanced → Go to Vyapara Billing*.
+4. *Clients* (Credentials) → **Create client** → type **Web application** →
+   authorised redirect URI: `https://pos.chandanls.in/api/backups/google/callback`
+   (your `PUBLIC_URL` + `/api/backups/google/callback`).
+5. Put the client ID and secret in the shop laptop's `.env` with
+   `PUBLIC_URL=https://pos.chandanls.in`, restart the app.
+6. Settings → **Google Drive Backup** → **Connect Google Drive**, sign in and
+   allow. Then press **Backup Now** once to check the first upload.
+
+**Restoring from Drive:** download the `.db.gz` file, unzip it (double-click on
+a Mac; 7-Zip on Windows) to get the `.db` file, stop the app, put it at
+`DB_PATH` (moving the old `pos.db`, `pos.db-wal` and `pos.db-shm` aside), and
+start the app.
 
 ---
 

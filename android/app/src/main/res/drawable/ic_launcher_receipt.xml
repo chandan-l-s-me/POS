@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- App icon foreground: a receipt with a rupee line total. Drawn inside the
+     adaptive icon's 66dp safe zone (21..87 of 108). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Paper with a torn (zig-zag) bottom edge. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,26 L72,26 Q75,26 75,29 L75,80 L71,76 L67,80 L63,76 L59,80 L55,76 L51,80 L47,76 L43,80 L39,76 L35,80 L33,78 L33,29 Q33,26 36,26 Z" />
+    <!-- Item lines. -->
+    <path android:fillColor="#2733A6" android:pathData="M40,36 h22 a2,2 0 0 1 0,4 h-22 a2,2 0 0 1 0,-4 z" />
+    <path android:fillColor="#2733A6" android:pathData="M40,45 h28 a2,2 0 0 1 0,4 h-28 a2,2 0 0 1 0,-4 z" />
+    <path android:fillColor="#2733A6" android:pathData="M40,54 h18 a2,2 0 0 1 0,4 h-18 a2,2 0 0 1 0,-4 z" />
+    <!-- Total, in the app's orange. -->
+    <path android:fillColor="#EA580C" android:pathData="M52,63 h16 a3,3 0 0 1 0,6 h-16 a3,3 0 0 1 0,-6 z" />
+</vector>

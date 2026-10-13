@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { Download, Phone, Search, Wallet } from 'lucide-react';
 import { api } from '../api';

@@ -1,14 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { 
   TrendingUp, 
-  TrendingDown, 
   DollarSign, 
   Package, 
-  Users, 
   ShoppingCart,
-  ArrowUpRight,
-  ArrowDownRight,
   Calendar,
   Wallet,
 } from 'lucide-react';
@@ -264,7 +260,7 @@ export const Dashboard = () => {
                   dataKey="total"
                   nameKey="payment_method"
                 >
-                  {data.paymentMethods.map((entry: any, index: number) => (
+                  {data.paymentMethods.map((_entry: any, index: number) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Download, FileSpreadsheet, Search } from 'lucide-react';
 import { api } from '../api';
 import { Bill, Purchase } from '../types';

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Save, Store, ReceiptText, UserPlus, ShieldCheck, HardDriveDownload } from 'lucide-react';
+import { Save, Store, ReceiptText, UserPlus, ShieldCheck, HardDriveDownload, Printer, CloudUpload } from 'lucide-react';
+import { isPrintStation, setPrintStation } from '../components/PrintStation';
 import { api } from '../api';
 import { ShopSettings, User } from '../types';
 import { useAuthStore } from '../store/useAuthStore';
@@ -230,9 +231,12 @@ export const Settings = () => {
     try {
       const result = await api.createLocalBackup();
       setBackupMessage(
-        `Backup saved successfully as ${result.fileName}` + (result.copiedTo ? `, and copied to ${result.copiedTo}.` : '.')
+        `Backup saved successfully as ${result.fileName}` +
+          (result.copiedTo ? `, and copied to ${result.copiedTo}` : '') +
+          (result.drive ? (result.drive.uploaded ? ', and uploaded to Google Drive.' : `. Google Drive upload failed: ${result.drive.error}`) : '.')
       );
       api.getLocalBackupStatus().then(setBackupStatus).catch(() => {});
+      window.dispatchEvent(new Event('drive-status-changed'));
     } catch (err: any) {
       setBackupMessage(err.message || 'Failed to create backup.');
     } finally {
@@ -558,6 +562,10 @@ export const Settings = () => {
         </div>
       </div>
 
+      <PrintStationSetting />
+
+      <GoogleDriveSetting />
+
       <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100 space-y-6">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-sky-100 text-sky-700 flex items-center justify-center">
@@ -639,6 +647,186 @@ export const Settings = () => {
           </p>
         )}
       </div>
+    </div>
+  );
+};
+
+/**
+ * Whether this computer prints bills saved on the Quick Bill phone app. Kept
+ * per computer (in the browser), so only the counter with the receipt printer
+ * turns it on.
+ */
+const PrintStationSetting = () => {
+  const [on, setOn] = useState(isPrintStation);
+  const toggle = () => {
+    setPrintStation(!on);
+    setOn(!on);
+  };
+  return (
+    <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100 space-y-4">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-2xl bg-orange-100 text-orange-700 flex items-center justify-center">
+            <Printer size={22} />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">Print Bills From Phones</h2>
+            <p className="text-sm text-gray-500">
+              Turn on at the counter computer that has the receipt printer. Bills saved on the Quick Bill app then print here automatically.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          onClick={toggle}
+          className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${on ? 'bg-emerald-500' : 'bg-gray-300'}`}
+        >
+          <span className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow transition-all ${on ? 'left-7' : 'left-1'}`} />
+        </button>
+      </div>
+      <p className="text-sm text-gray-500">
+        {on
+          ? 'On for this computer. Keep the app open here (any page). For printing without a dialog each time, start Chrome with --kiosk-printing.'
+          : 'Off for this computer.'}
+      </p>
+    </div>
+  );
+};
+
+interface DriveStatus {
+  configured: boolean;
+  connected: boolean;
+  email: string | null;
+  folder_name: string;
+  last_upload_at: string | null;
+  last_upload_file: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  redirect_uri: string | null;
+}
+
+/**
+ * Backups to the owner's Google Drive: connect once, then every backup (the
+ * daily automatic one and Backup Now) is uploaded too. See server/googleDrive.ts.
+ */
+const GoogleDriveSetting = () => {
+  const [status, setStatus] = useState<DriveStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const load = () => api.getGoogleDriveStatus().then(setStatus).catch(() => setStatus(null));
+
+  useEffect(() => {
+    void load();
+    // Back from Google's sign-in page: say how it went, then tidy the address bar.
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get('drive');
+    if (result === 'connected') setMessage({ ok: true, text: 'Google Drive connected. Every backup will now be uploaded there too.' });
+    if (result === 'error') setMessage({ ok: false, text: `Google Drive was not connected: ${params.get('reason') || 'unknown error'}` });
+    if (result) window.history.replaceState(null, '', window.location.pathname);
+    const refresh = () => void load();
+    window.addEventListener('drive-status-changed', refresh);
+    return () => window.removeEventListener('drive-status-changed', refresh);
+  }, []);
+
+  const connect = async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const { url } = await api.connectGoogleDrive();
+      window.location.href = url;
+    } catch (err: any) {
+      setMessage({ ok: false, text: err.message || 'Could not start connecting.' });
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async () => {
+    if (!window.confirm('Stop backing up to Google Drive? Backups already in Drive stay there.')) return;
+    setBusy(true);
+    try {
+      await api.disconnectGoogleDrive();
+      setMessage({ ok: true, text: 'Google Drive disconnected.' });
+      await load();
+    } catch (err: any) {
+      setMessage({ ok: false, text: err.message || 'Could not disconnect.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-white p-5 sm:p-8 rounded-3xl shadow-sm border border-gray-100 space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+            <CloudUpload size={22} />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">Google Drive Backup</h2>
+            <p className="text-sm text-gray-500">A copy of every backup in your Google Drive, safe even if this computer fails.</p>
+          </div>
+        </div>
+        {status?.configured && (
+          status.connected ? (
+            <button type="button" onClick={disconnect} disabled={busy} className="px-4 py-2.5 rounded-2xl border border-gray-200 text-sm font-bold text-red-600 hover:bg-red-50 disabled:opacity-50">
+              Disconnect
+            </button>
+          ) : (
+            <button type="button" onClick={connect} disabled={busy} className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-orange-600 text-white font-bold shadow-lg shadow-orange-200 hover:bg-orange-700 disabled:opacity-50">
+              <CloudUpload size={18} />
+              {busy ? 'Opening Google…' : 'Connect Google Drive'}
+            </button>
+          )
+        )}
+      </div>
+
+      {!status ? (
+        <p className="text-sm text-gray-400">Loading…</p>
+      ) : !status.configured ? (
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-gray-700 space-y-1">
+          <p className="font-semibold text-gray-900">Not set up on the server yet.</p>
+          <p>
+            Add <span className="font-mono">GOOGLE_CLIENT_ID</span>, <span className="font-mono">GOOGLE_CLIENT_SECRET</span> and{' '}
+            <span className="font-mono">PUBLIC_URL</span> to the server’s <span className="font-mono">.env</span> and restart it
+            — the README’s “Google Drive backup” section has the steps. Then connect here.
+          </p>
+        </div>
+      ) : status.connected ? (
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">Account</p>
+            <p className="mt-2 font-bold text-green-600 break-all">{status.email || 'Connected'}</p>
+            <p className="text-xs text-gray-500 mt-1">Folder “{status.folder_name}”</p>
+          </div>
+          <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">Last Upload</p>
+            <p className={`mt-2 font-bold ${status.last_upload_at ? 'text-gray-900' : 'text-amber-600'}`}>
+              {status.last_upload_at ? formatDateTimeInIST(status.last_upload_at) : 'Not yet'}
+            </p>
+            {!status.last_upload_at && <p className="text-xs text-gray-500 mt-1">Press Backup Now below to send the first one.</p>}
+          </div>
+          <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">Status</p>
+            {status.last_error && (!status.last_upload_at || (status.last_error_at ?? '') > status.last_upload_at) ? (
+              <p className="mt-2 text-sm font-semibold text-red-600">{status.last_error}</p>
+            ) : (
+              <p className="mt-2 font-bold text-green-600">Working</p>
+            )}
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-600">
+          Ready to connect. You will sign in with the Google account whose Drive should hold the backups. The app can only
+          see the files it uploads — nothing else in your Drive.
+        </p>
+      )}
+
+      {message && (
+        <p className={`text-sm font-medium ${message.ok ? 'text-green-600' : 'text-red-600'}`}>{message.text}</p>
+      )}
     </div>
   );
 };

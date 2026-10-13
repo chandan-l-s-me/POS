@@ -94,16 +94,13 @@ export const saleGstRate = (item: TaxableItem): number => {
 };
 
 /**
- * Selling price (GST-inclusive) for a purchase cost and a profit margin.
+ * What margin a GST-inclusive selling price gives on a cost. Null when the
+ * cost is unknown.
  *
  * Profit is on the cost *before* GST: the shop claims purchase GST back as
  * input tax credit, so the pre-GST cost is what the goods really cost it, and
  * output GST is collected on top of the pre-GST selling price.
  */
-export const sellingPriceFromProfit = (unitCost: number, profitPercent: number, gstRate: number): number =>
-  round2(unitCost * (1 + profitPercent / 100) * (1 + gstRate / 100));
-
-/** The inverse: what margin a GST-inclusive selling price gives on a cost. Null when the cost is unknown. */
 export const profitPercentFromSellingPrice = (
   unitCost: number | null | undefined,
   sellingPrice: number,

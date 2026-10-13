@@ -323,6 +323,23 @@ export function initDb() {
       FOREIGN KEY (purchase_id) REFERENCES purchases(id)
     );
 
+    -- Bills waiting to be printed on the counter's receipt printer. A bill
+    -- saved on a phone is queued here; the counter computer (the "print
+    -- station") picks each one up and prints it. Claiming a job marks it
+    -- printed in one step, so two print stations can never print it twice.
+    CREATE TABLE IF NOT EXISTS print_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'printed')),
+      requested_by INTEGER,
+      requested_by_name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      printed_at DATETIME,
+      printed_by_name TEXT,
+      FOREIGN KEY (bill_id) REFERENCES bills(id),
+      FOREIGN KEY (requested_by) REFERENCES users(id)
+    );
+
     CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -500,6 +517,8 @@ export function initDb() {
   ensureIndex('idx_bill_item_batches_batch', 'ON bill_item_batches(batch_id)');
   ensureIndex('idx_stock_adjustments_item', 'ON stock_adjustments(item_id, created_at)');
   ensureIndex('idx_purchases_supplier_id', 'ON purchases(supplier_id)');
+  ensureIndex('idx_print_jobs_pending', 'ON print_jobs(status, created_at)');
+  ensureIndex('idx_print_jobs_bill', 'ON print_jobs(bill_id)');
   ensureIndex('idx_supplier_payments_supplier', 'ON supplier_payments(supplier_id, paid_on)');
   ensureIndex('idx_supplier_payments_paid_on', 'ON supplier_payments(paid_on)');
   ensureIndex('idx_supplier_payment_allocations_purchase', 'ON supplier_payment_allocations(purchase_id)');

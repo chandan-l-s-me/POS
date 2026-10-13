@@ -85,25 +85,6 @@ export interface Customer {
   created_at: string;
 }
 
-export type CreditEntryType = 'opening' | 'sale' | 'payment' | 'adjustment';
-
-/** One change to a customer's outstanding credit. */
-export interface CustomerCreditEntry {
-  id: number;
-  customer_id: number;
-  bill_id?: number | null;
-  bill_number?: string | null;
-  entry_type: CreditEntryType;
-  /** Signed: positive increases what the customer owes. */
-  amount: number;
-  balance_before: number;
-  balance_after: number;
-  note?: string | null;
-  user_id?: number | null;
-  user_name: string;
-  created_at: string;
-}
-
 /**
  * One line of a customer's passbook: a bill (however it was paid), or a
  * payment, correction or opening balance on their account.

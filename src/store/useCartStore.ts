@@ -164,7 +164,7 @@ const updateActiveCart = (
   updater: (cart: BillingCart) => BillingCart
 ) => carts.map((cart) => (cart.id === activeCartId ? recalculateCart(updater(cart)) : cart));
 
-export const useCartStore = create<CartState>((set, get) => {
+export const useCartStore = create<CartState>((set) => {
   const initialCart = createEmptyCart(1);
 
   return {

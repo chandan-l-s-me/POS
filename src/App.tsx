@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from './store/useAuthStore';
 import { useDataStore } from './store/useDataStore';
 import { useThemeStore } from './store/useThemeStore';
@@ -21,20 +21,25 @@ import { Reports } from './pages/Reports';
 import { Dashboard } from './pages/Dashboard';
 import { Settings } from './pages/Settings';
 import { Logs } from './pages/Logs';
+import { QuickBill } from './pages/QuickBill';
 import { useHsnScanner } from './hooks/useHsnScanner';
 
-const ProtectedRoute = ({ children, roles }: { children: React.ReactNode; roles?: string[] }) => {
+const ProtectedRoute = ({ children, roles, bare }: { children: React.ReactNode; roles?: string[]; bare?: boolean }) => {
   const { user, token } = useAuthStore();
-  
+  const location = useLocation();
+
   if (!token || !user) {
-    return <Navigate to="/login" replace />;
+    // Remember where they were going, so the phone app lands back on Quick
+    // Bill after signing in rather than on the counter's screens.
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
   if (roles && !roles.includes(user.role)) {
     return <Navigate to="/billing" replace />;
   }
 
-  return <Layout>{children}</Layout>;
+  // Quick Bill is a full-screen phone layout, without the sidebar.
+  return bare ? <>{children}</> : <Layout>{children}</Layout>;
 };
 
 /**
@@ -55,6 +60,12 @@ const AppRoutes = () => {
         </ProtectedRoute>
       } />
       
+      <Route path="/m" element={
+        <ProtectedRoute bare>
+          <QuickBill />
+        </ProtectedRoute>
+      } />
+
       <Route path="/billing" element={
         <ProtectedRoute>
           <Billing />

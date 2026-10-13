@@ -78,6 +78,10 @@ export const api = {
     fetchWithAuth('/admin/account', { method: 'PUT', body: JSON.stringify(account) }),
   getLocalBackupStatus: () => fetchWithAuth('/backups/local/status'),
   createLocalBackup: () => fetchWithAuth('/backups/local', { method: 'POST' }),
+  getGoogleDriveStatus: () => fetchWithAuth('/backups/google/status'),
+  /** Returns the Google sign-in URL to send the browser to. */
+  connectGoogleDrive: () => fetchWithAuth('/backups/google/connect', { method: 'POST' }),
+  disconnectGoogleDrive: () => fetchWithAuth('/backups/google/disconnect', { method: 'POST' }),
   getCashiers: () => fetchWithAuth('/cashiers'),
   addCashier: (cashier: { name: string; username: string; password: string }) => fetchWithAuth('/cashiers', { method: 'POST', body: JSON.stringify(cashier) }),
   
@@ -123,6 +127,19 @@ export const api = {
   getBillsPage: (params?: ListQuery) => fetchWithAuth(`/bills${buildQuery(params)}`),
   getBill: (id: number) => fetchWithAuth(`/bills/${id}`),
   createBill: (bill: any) => fetchWithAuth('/bills', { method: 'POST', body: JSON.stringify(bill) }),
+
+  // Quick Bill (phone app)
+  /** What this customer usually buys, and the shop's best sellers. */
+  getQuickItems: (customerId?: number | null) =>
+    fetchWithAuth(`/quick-items${customerId ? `?customer_id=${customerId}` : ''}`),
+  /** A customer's most recent bill, item by item, for "repeat last order". */
+  getLastOrder: (customerId: number) => fetchWithAuth(`/customers/${customerId}/last-order`),
+
+  // Counter print queue
+  requestCounterPrint: (billId: number) => fetchWithAuth(`/bills/${billId}/print-requests`, { method: 'POST' }),
+  getPrintJobs: () => fetchWithAuth('/print-jobs'),
+  getPrintJob: (id: number) => fetchWithAuth(`/print-jobs/${id}`),
+  claimPrintJob: (id: number) => fetchWithAuth(`/print-jobs/${id}/claim`, { method: 'POST' }),
   /** Delete a bill: its stock goes back to the batches it came from and its credit comes off the customer. Admin. */
   deleteBill: (id: number) => fetchWithAuth(`/bills/${id}`, { method: 'DELETE' }),
 

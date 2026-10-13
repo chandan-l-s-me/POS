@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
 import { api } from '../api';
 import { motion } from 'motion/react';
@@ -15,6 +15,7 @@ export const Login = () => {
   
   const setAuth = useAuthStore((state) => state.setAuth);
   const navigate = useNavigate();
+  const location = useLocation();
   // The counter machine usually sits on this screen between shifts, so the
   // option belongs here as well — otherwise the only way to go full screen is
   // to sign in first.
@@ -29,7 +30,11 @@ export const Login = () => {
     try {
       const { token, user } = await api.login({ username, password });
       setAuth(user, token);
-      navigate(user.role === 'admin' ? '/' : '/billing');
+      // Back to where they were headed (the phone app opens /m); otherwise a
+      // cashier on a phone gets Quick Bill and everyone else their usual start.
+      const from = (location.state as { from?: string } | null)?.from;
+      const onPhone = window.matchMedia('(max-width: 640px)').matches;
+      navigate(from && from !== '/login' ? from : user.role === 'admin' ? '/' : onPhone ? '/m' : '/billing', { replace: true });
     } catch (err: any) {
       setError(err.message);
     } finally {
