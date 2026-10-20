@@ -3765,8 +3765,25 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
+    // Built assets have a content hash in their names, so a file never changes:
+    // browsers and Cloudflare may keep it for a year.
+    app.use('/assets', express.static(path.join(distPath, 'assets'), { immutable: true, maxAge: '365d', index: false }));
+    // A missing asset is a 404. It used to get index.html with a 200, which a
+    // browser left open across an update then tried to use as its stylesheet
+    // (prints came out unstyled) - and Cloudflare cached that for hours.
+    app.use('/assets', (_req, res) => {
+      res.status(404).type('text/plain').send('Not found');
+    });
+    app.use(express.static(distPath, { index: false, maxAge: 0 }));
+    app.get('*', (req, res) => {
+      if (req.path.startsWith('/api/') || path.extname(req.path)) {
+        res.status(404).type('text/plain').send('Not found');
+        return;
+      }
+      // The page that names the current assets: never kept anywhere, so after
+      // an update every browser loads the new version, not a stale copy that
+      // points at files that are gone.
+      res.setHeader('Cache-Control', 'no-store');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
