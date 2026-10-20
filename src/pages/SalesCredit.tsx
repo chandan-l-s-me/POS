@@ -176,6 +176,7 @@ export const SalesCredit = () => {
             />
           </div>
           <select
+            aria-label="Show customers"
             value={minAge}
             onChange={(e) => setMinAge(Number(e.target.value))}
             className="px-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm font-semibold text-gray-700"

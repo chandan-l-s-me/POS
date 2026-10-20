@@ -155,6 +155,8 @@ export const Customers = () => {
               </div>
               <button 
                 onClick={() => handleOpenModal(customer)}
+                aria-label={`Edit ${customer.shop_name || customer.name}`}
+                title="Edit"
                 className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-all"
               >
                 <Edit2 size={18} />
@@ -164,7 +166,7 @@ export const Customers = () => {
             {/* The bakery/shop is how this shop knows the customer, so it is
                 the heading; the person's name is who to ask for. A customer
                 with no shop is headed by their own name. */}
-            <h4 className="font-bold text-xl text-gray-900 mb-1">
+            <h4 className="font-bold text-xl text-gray-900 mb-1 break-words">
               <Link to={`/customers/${customer.id}`} className="hover:underline">
                 {customerDisplayName(customer)}
               </Link>
@@ -202,7 +204,7 @@ export const Customers = () => {
                   "text-lg font-black",
                   customer.credit_balance > 0 ? "text-red-500" : "text-green-500"
                 )}>
-                  ₹{customer.credit_balance.toFixed(2)}
+                  ₹{customer.credit_balance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </p>
               </div>
               <Link

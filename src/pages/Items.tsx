@@ -226,12 +226,16 @@ export const Items = () => {
                 <div className="flex gap-1">
                   <button 
                     onClick={() => handleOpenModal(item)}
+                    aria-label={`Edit ${item.name}`}
+                    title="Edit"
                     className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-all"
                   >
                     <Edit2 size={18} />
                   </button>
                   <button 
                     onClick={() => handleDelete(item.id)}
+                    aria-label={`Delete ${item.name}`}
+                    title="Delete"
                     className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
                   >
                     <Trash2 size={18} />
@@ -240,7 +244,7 @@ export const Items = () => {
               )}
             </div>
 
-            <h4 className="font-bold text-gray-900 mb-1">{item.name}</h4>
+            <h4 className="font-bold text-gray-900 mb-1 break-words">{item.name}</h4>
             <p className="text-xs text-gray-400 mb-4 font-mono">HSN: {item.hsn_code || 'NOT SET'}</p>
 
             <div className="flex items-center justify-between pt-4 border-t border-gray-50">

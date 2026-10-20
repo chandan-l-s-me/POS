@@ -21,6 +21,7 @@ import {
   type PrinterSettings,
 } from '../lib/nativePrinter';
 import { isLooseUnit } from '../lib/units';
+import { useBackButton } from '../lib/backButton';
 import { round2 } from '../lib/billMath';
 import { cn, formatDateInIST } from '../lib/utils';
 
@@ -336,6 +337,10 @@ export const QuickBill = () => {
     }
   };
 
+  const newBill = () => { setDone(null); setPrintState({ kind: 'idle' }); };
+  // Back on the "Bill saved" screen starts the next bill, as New bill does.
+  useBackButton(done !== null, newBill);
+
   const saveLabel = saving
     ? 'Saving…'
     : printMode === 'counter' ? 'Save & print at counter' : printMode === 'bluetooth' ? 'Save & print' : 'Save bill';
@@ -601,7 +606,7 @@ export const QuickBill = () => {
             </p>
           )}
           <div className="mt-8 w-full max-w-sm space-y-2">
-            <button onClick={() => { setDone(null); setPrintState({ kind: 'idle' }); }} className="h-14 w-full rounded-2xl bg-orange-600 text-lg font-black text-white active:bg-orange-700">
+            <button onClick={newBill} className="h-14 w-full rounded-2xl bg-orange-600 text-lg font-black text-white active:bg-orange-700">
               New bill
             </button>
             <button
@@ -633,22 +638,25 @@ export const QuickBill = () => {
 
 // --- Sheets -------------------------------------------------------------------
 
-const SheetFrame = ({ title, onClose, children, tall }: { title: string; onClose: () => void; children: React.ReactNode; tall?: boolean }) => (
-  <div className="fixed inset-0 z-30 flex flex-col justify-end bg-black/30" onClick={onClose}>
-    <div
-      onClick={(event) => event.stopPropagation()}
-      className={cn('flex flex-col rounded-t-3xl bg-white pb-[max(1rem,env(safe-area-inset-bottom))]', tall ? 'h-[92vh]' : 'max-h-[92vh]')}
-    >
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-        <p className="text-lg font-black">{title}</p>
-        <button onClick={onClose} aria-label="Close" className="flex h-11 w-11 items-center justify-center rounded-xl active:bg-gray-100">
-          <X size={22} />
-        </button>
+const SheetFrame = ({ title, onClose, children, tall }: { title: string; onClose: () => void; children: React.ReactNode; tall?: boolean }) => {
+  useBackButton(true, onClose);
+  return (
+    <div className="fixed inset-0 z-30 flex flex-col justify-end bg-black/30" onClick={onClose}>
+      <div
+        onClick={(event) => event.stopPropagation()}
+        className={cn('flex flex-col rounded-t-3xl bg-white pb-[max(1rem,env(safe-area-inset-bottom))]', tall ? 'h-[92vh]' : 'max-h-[92vh]')}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <p className="text-lg font-black">{title}</p>
+          <button onClick={onClose} aria-label="Close" className="flex h-11 w-11 items-center justify-center rounded-xl active:bg-gray-100">
+            <X size={22} />
+          </button>
+        </div>
+        {children}
       </div>
-      {children}
     </div>
-  </div>
-);
+  );
+};
 
 const SearchBox = ({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) => (
   <div className="relative px-4 pt-3">

@@ -354,10 +354,19 @@ Item prices are **GST-inclusive**. For each bill line (one per price segment,
 see above) the computation is, in this order:
 
 ```
+unit taxable = unit price x 100 / (100 + total GST rate)
+unit tax     = unit taxable x rate / 100                   <- each of sgst/cgst/igst
 line total   = round2(unit price x quantity)
 sgst/cgst/igst = round2(unit tax x quantity)
 line taxable = round2(line total - sgst - cgst - igst)     <- by subtraction
 ```
+
+Each rate applies to the taxable value, never to the inclusive price: ₹105 at
+5% is ₹100 + ₹2.50 CGST + ₹2.50 SGST. Bills saved before 13 Oct 2026 took the
+rate of the inclusive price, which overstated the tax (₹2.63 each side on ₹105)
+and printed slabs like 2.63% on the invoice. Each bill line also stores the
+rates it was charged at (`bill_items.sgst_rate` etc.), and the invoice prints
+those.
 
 Deriving the taxable value by subtraction, rather than multiplying a rounded
 unit base by the quantity, is what makes `taxable + tax === total` exactly true

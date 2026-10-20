@@ -100,13 +100,16 @@ const toWords = (value: number) => {
     return text.trim();
   };
 
-  const roundedValue = Math.round(value);
-  if (roundedValue === 0) return 'Zero';
+  // Rupees and paise apart. Rounding to whole rupees printed a ₹37.38 tax as
+  // "Thirty Seven"; the words must say the same as the figures.
+  const totalPaise = Math.round(value * 100);
+  const rupees = Math.floor(totalPaise / 100);
+  const paise = totalPaise % 100;
 
-  const crore = Math.floor(roundedValue / 10000000);
-  const lakh = Math.floor((roundedValue % 10000000) / 100000);
-  const thousand = Math.floor((roundedValue % 100000) / 1000);
-  const remainder = roundedValue % 1000;
+  const crore = Math.floor(rupees / 10000000);
+  const lakh = Math.floor((rupees % 10000000) / 100000);
+  const thousand = Math.floor((rupees % 100000) / 1000);
+  const remainder = rupees % 1000;
 
   const parts = [
     crore ? `${convertBelowThousand(crore)} Crore` : '',
@@ -115,7 +118,8 @@ const toWords = (value: number) => {
     remainder ? convertBelowThousand(remainder) : '',
   ].filter(Boolean);
 
-  return parts.join(' ').trim();
+  const rupeeWords = parts.join(' ').trim() || 'Zero';
+  return paise ? `${rupeeWords} and ${convertBelowThousand(paise)} Paise` : rupeeWords;
 };
 
 export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOverride }) => {
@@ -180,9 +184,13 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
     const totalTax = item.sgst_amount + item.cgst_amount + igst;
     const qty = item.quantity || 0;
     const rate = qty > 0 ? taxable / qty : 0;
-    const cgstRate = taxable > 0 ? (item.cgst_amount / taxable) * 100 : 0;
-    const sgstRate = taxable > 0 ? (item.sgst_amount / taxable) * 100 : 0;
-    const igstRate = taxable > 0 ? (igst / taxable) * 100 : 0;
+    // The slab the line was charged at. Working it back from the rounded
+    // amounts printed rates like 2.52% for a 2.5% slab, so that is only a
+    // fallback for a bill that arrives without its rates.
+    const derived = (amount: number) => (taxable > 0 ? (amount / taxable) * 100 : 0);
+    const cgstRate = item.cgst_rate ?? derived(item.cgst_amount);
+    const sgstRate = item.sgst_rate ?? derived(item.sgst_amount);
+    const igstRate = item.igst_rate ?? derived(igst);
     return {
       item,
       taxable,

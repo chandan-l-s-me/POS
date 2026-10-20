@@ -124,13 +124,15 @@ export const Suppliers = () => {
               </div>
               <button
                 onClick={() => handleOpenModal(supplier)}
+                aria-label={`Edit ${supplier.name}`}
+                title="Edit"
                 className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-all"
               >
                 <Edit2 size={18} />
               </button>
             </div>
 
-            <h4 className="font-bold text-xl text-gray-900 mb-4">{supplier.name}</h4>
+            <h4 className="font-bold text-xl text-gray-900 mb-4 break-words">{supplier.name}</h4>
 
             <div className="space-y-3 mb-6">
               <div className="flex items-center gap-3 text-gray-500 text-sm">

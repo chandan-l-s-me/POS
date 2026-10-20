@@ -358,6 +358,22 @@ describe('purchase date filtering', () => {
   it('rejects a malformed purchase date filter', async () => {
     assert.equal((await admin.get('/api/purchases?from=31-12-2024')).status, 400);
   });
+  it('searches purchases by supplier invoice, supplier and item', async () => {
+    const byInvoice = (await admin.get('/api/purchases?search=WC-001')).body;
+    assert.ok(byInvoice.total >= 1);
+    assert.ok(byInvoice.data.every((p: any) => p.invoice_number === 'WC-001'));
+
+    const bySupplier = (await admin.get('/api/purchases?search=wholesale')).body;
+    assert.ok(bySupplier.data.some((p: any) => p.supplier_name === 'Wholesale Co'), 'case-insensitive supplier match');
+
+    const first = (await admin.get(`/api/purchases/${byInvoice.data[0].id}`)).body;
+    const itemName = first.items[0].item_name;
+    const byItem = (await admin.get(`/api/purchases?search=${encodeURIComponent(itemName)}`)).body;
+    assert.ok(byItem.data.some((p: any) => p.id === first.id), 'a purchase is found by an item on it');
+
+    const none = (await admin.get('/api/purchases?search=no-such-purchase-anywhere')).body;
+    assert.equal(none.total, 0);
+  });
 });
 
 describe('low stock', () => {

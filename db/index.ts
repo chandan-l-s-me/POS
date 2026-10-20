@@ -386,6 +386,13 @@ export function initDb() {
   // Whether the cashier changed a line's price. Billing no longer allows that,
   // so new lines are always 0; the column stays for lines already written.
   ensureColumn('bill_items', 'price_overridden', 'INTEGER NOT NULL DEFAULT 0');
+  // The GST rates a line was charged at, so the invoice prints the slab that
+  // applied on the day even if the item's rate changes later. NULL on lines
+  // written before these columns existed; the invoice then uses the item's
+  // current rates.
+  ensureColumn('bill_items', 'sgst_rate', 'REAL');
+  ensureColumn('bill_items', 'cgst_rate', 'REAL');
+  ensureColumn('bill_items', 'igst_rate', 'REAL');
   // What the stock on a purchase line was priced to sell at, and the profit
   // margin that gives on its cost. Kept on the purchase itself so reports can
   // show them; the purchase screen deliberately does not.

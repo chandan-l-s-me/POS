@@ -30,20 +30,38 @@ export interface TaxableItem {
 const itemGstMode = (item: TaxableItem) => item.gst_mode || (item.igst_rate ? 'igst' : 'split');
 
 /**
+ * The GST rates, as percentages, a sale of this item is charged at. Stored on
+ * each bill line so the invoice prints the slab that was charged, not one
+ * worked back from rounded amounts.
+ */
+export const lineGstRates = (item: TaxableItem) => {
+  if (!item.gst_applicable) return { sgst_rate: 0, cgst_rate: 0, igst_rate: 0 };
+  if (itemGstMode(item) === 'igst') {
+    return { sgst_rate: 0, cgst_rate: 0, igst_rate: Number(item.igst_rate || item.gst_rate || 0) };
+  }
+  return { sgst_rate: Number(item.sgst_rate || 0), cgst_rate: Number(item.cgst_rate || 0), igst_rate: 0 };
+};
+
+/**
  * Tax inside one GST-inclusive unit price. Selling prices in this app include
- * GST, so tax is carved out of the price rather than added on top.
+ * GST, so tax is carved out of the price rather than added on top: at 5%, a
+ * ₹105 price is ₹100 taxable + ₹2.50 CGST + ₹2.50 SGST.
+ *
+ * Each rate applies to the taxable value, never to the inclusive price. Taking
+ * 2.5% of the ₹105 overcharged the tax and printed slabs like 2.63% on the
+ * invoice.
  */
 export const unitTaxBreakdown = (item: TaxableItem, unitPrice: number) => {
-  if (!item.gst_applicable) {
-    return { sgstUnit: 0, cgstUnit: 0, igstUnit: 0, basePriceUnit: unitPrice };
-  }
-  if (itemGstMode(item) === 'igst') {
-    const igstUnit = (unitPrice * (item.igst_rate || item.gst_rate || 0)) / 100;
-    return { sgstUnit: 0, cgstUnit: 0, igstUnit, basePriceUnit: unitPrice - igstUnit };
-  }
-  const sgstUnit = (unitPrice * item.sgst_rate) / 100;
-  const cgstUnit = (unitPrice * item.cgst_rate) / 100;
-  return { sgstUnit, cgstUnit, igstUnit: 0, basePriceUnit: unitPrice - sgstUnit - cgstUnit };
+  const { sgst_rate, cgst_rate, igst_rate } = lineGstRates(item);
+  // price × 100 / (100 + rate) rather than price / 1.05, which keeps round
+  // prices exact: 118 at 18% is 100, not 99.99999999999999.
+  const basePriceUnit = (unitPrice * 100) / (100 + sgst_rate + cgst_rate + igst_rate);
+  return {
+    sgstUnit: (basePriceUnit * sgst_rate) / 100,
+    cgstUnit: (basePriceUnit * cgst_rate) / 100,
+    igstUnit: (basePriceUnit * igst_rate) / 100,
+    basePriceUnit,
+  };
 };
 
 export interface LineAmounts {

@@ -198,6 +198,13 @@ const seed = db.transaction(() => {
   // driven. This is the whole reason this script is demo-only: real installs
   // get a random admin password printed once at first startup.
   const ADMIN_DEMO_PASSWORD = 'DemoAdmin2026';
+  // The server creates the admin on its first start; on a database it has
+  // never opened there is none yet, so create it here.
+  db.prepare(`
+    INSERT INTO users (username, password, role, name)
+    SELECT 'admin', '', 'admin', 'System Admin'
+    WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')
+  `).run();
   db.prepare('UPDATE users SET password = ?, token_version = token_version + 1 WHERE role = ?')
     .run(bcrypt.hashSync(ADMIN_DEMO_PASSWORD, 12), 'admin');
 
@@ -391,8 +398,8 @@ const seed = db.transaction(() => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertBillItem = db.prepare(`
-    INSERT INTO bill_items (bill_id, item_id, quantity, price, sgst_amount, cgst_amount, igst_amount, total_amount)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO bill_items (bill_id, item_id, quantity, price, sgst_amount, cgst_amount, igst_amount, total_amount, sgst_rate, cgst_rate, igst_rate)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const creditPerCustomer = new Map<number, number>();
@@ -402,9 +409,11 @@ const seed = db.transaction(() => {
     let subtotal = 0;
     let tax = 0;
     const lines = bill.lines.map(({ item, quantity }) => {
-      // Mirrors computeUnitTaxBreakdown in server.ts: price is GST-inclusive.
-      const sgstUnit = (item.price * item.sgst_rate) / 100;
-      const cgstUnit = (item.price * item.cgst_rate) / 100;
+      // Mirrors unitTaxBreakdown in src/lib/billMath.ts: price is GST-inclusive,
+      // and each rate applies to the taxable value inside it.
+      const baseUnit = (item.price * 100) / (100 + item.sgst_rate + item.cgst_rate);
+      const sgstUnit = (baseUnit * item.sgst_rate) / 100;
+      const cgstUnit = (baseUnit * item.cgst_rate) / 100;
       const lineSgst = round2(sgstUnit * quantity);
       const lineCgst = round2(cgstUnit * quantity);
       const lineTotal = round2(item.price * quantity);
@@ -417,6 +426,7 @@ const seed = db.transaction(() => {
         item_id: item.id, quantity,
         price: quantity > 0 ? round2(lineTaxable / quantity) : 0,
         sgst: lineSgst, cgst: lineCgst, total: lineTotal,
+        sgstRate: item.sgst_rate, cgstRate: item.cgst_rate,
       };
     });
 
@@ -442,7 +452,7 @@ const seed = db.transaction(() => {
     const billId = Number(res.lastInsertRowid);
 
     for (const l of lines) {
-      insertBillItem.run(billId, l.item_id, l.quantity, l.price, l.sgst, l.cgst, 0, l.total);
+      insertBillItem.run(billId, l.item_id, l.quantity, l.price, l.sgst, l.cgst, 0, l.total, l.sgstRate, l.cgstRate, 0);
     }
 
     if (bill.customer && credit > 0) {

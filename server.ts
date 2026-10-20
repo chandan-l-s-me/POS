@@ -14,6 +14,7 @@ import { readPool } from './db/asyncRead';
 import {
   allocateFifo,
   computeLine,
+  lineGstRates,
   priceSegments,
   profitPercentFromSellingPrice,
   round2,
@@ -1071,107 +1072,192 @@ app.post('/api/backups/google/disconnect', authenticateToken, requireAdmin, rout
   res.json({ success: true });
 }));
 
-// --- Cashier Routes ---
-app.get('/api/cashiers', authenticateToken, requireAdmin, (_req, res) => {
-  const cashiers = db.prepare(`
-    SELECT id, username, role, name, is_active
-    FROM users
-    WHERE role = 'cashier'
-    ORDER BY name ASC
-  `).all();
+// --- Staff Accounts ---
+//
+// Admins and cashiers alike. The role is chosen when an account is created and
+// never changes afterwards: promoting a cashier means a new admin account, so
+// the audit log always says plainly who could do what when.
 
-  res.json(cashiers);
-});
+const STAFF_COLUMNS = 'id, username, role, name, is_active';
+type StaffRole = 'admin' | 'cashier';
 
-app.post('/api/cashiers', authenticateToken, requireAdmin, route((req, res) => {
+const readStaff = (id: number | bigint) =>
+  db.prepare(`SELECT ${STAFF_COLUMNS} FROM users WHERE id = ?`).get(id);
+
+const createStaffAccount = (req: express.Request, role: StaffRole) => {
   const name = reqString(req.body?.name, 'Name', 100);
   const username = reqString(req.body?.username, 'Username', 100);
   const password = validatePassword(req.body?.password, 'Password');
 
-  const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get(username) as any;
-  if (existingUser) {
-    res.status(400).json({ error: 'Username already exists' });
-    return;
-  }
+  if (db.prepare('SELECT id FROM users WHERE username = ?').get(username)) fail('Username already exists');
 
-  const hashedPassword = bcrypt.hashSync(password, BCRYPT_ROUNDS);
-  const result = db.prepare(`
-    INSERT INTO users (username, password, role, name)
-    VALUES (?, ?, 'cashier', ?)
-  `).run(username, hashedPassword, name);
-
-  const cashier = db.prepare(`
-    SELECT id, username, role, name, is_active
-    FROM users
-    WHERE id = ?
-  `).get(result.lastInsertRowid);
+  const result = db.prepare('INSERT INTO users (username, password, role, name) VALUES (?, ?, ?, ?)')
+    .run(username, bcrypt.hashSync(password, BCRYPT_ROUNDS), role, name);
+  const account = readStaff(result.lastInsertRowid) as any;
 
   writeAuditLog({
     user: req.user,
     action: 'create',
-    entityType: 'cashier',
-    entityId: (cashier as any).id,
-    details: `Created cashier account ${username} (${name})`,
+    entityType: role,
+    entityId: account.id,
+    details: `Created ${role} account ${username} (${name})`,
   });
-  res.status(201).json(cashier);
-}));
+  return account;
+};
 
 /**
- * Deactivate or reactivate a cashier, and reset their password.
+ * Deactivate or reactivate an account, and reset its password.
  *
- * There was previously no way to revoke a cashier's access at all — an
- * employee who left kept a working login forever. Deactivating (rather than
- * deleting) preserves the bills they rang up, which the foreign key requires
- * and GST records demand.
+ * Deactivating (rather than deleting) keeps the bills the person rang up,
+ * which the foreign key requires and GST records demand. Nobody can deactivate
+ * their own account, so the shop cannot lock itself out of admin. An admin's
+ * own password is changed under My account, which asks for the current one.
  */
-app.put('/api/cashiers/:id', authenticateToken, requireAdmin, route((req, res) => {
-  const id = rowId(req.params.id);
-  const cashier = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'cashier'").get(id) as any;
-  if (!cashier) {
-    res.status(404).json({ error: 'Cashier not found' });
-    return;
-  }
-
+const updateStaffAccount = (req: express.Request, account: any) => {
+  const isSelf = account.id === req.user.id;
   const changes: string[] = [];
-  let nextActive = cashier.is_active;
-  let nextPassword = cashier.password;
+  let nextActive = account.is_active;
+  let nextPassword = account.password;
   let bumpTokenVersion = false;
 
   if (req.body?.is_active !== undefined) {
     nextActive = bool(req.body.is_active);
-    if (nextActive !== cashier.is_active) {
+    if (nextActive !== account.is_active) {
+      if (!nextActive) {
+        // Only an active admin gets this far, so refusing their own account is
+        // also what guarantees an active admin always remains.
+        if (isSelf) fail('You cannot deactivate your own account.');
+        // Revoke any live session the moment the account is disabled.
+        bumpTokenVersion = true;
+      }
       changes.push(nextActive ? 'reactivated' : 'deactivated');
-      // Revoke any live session the moment the account is disabled.
-      if (!nextActive) bumpTokenVersion = true;
     }
   }
 
   if (req.body?.new_password !== undefined && req.body.new_password !== '') {
+    if (isSelf) fail('Change your own password under My account.');
     nextPassword = bcrypt.hashSync(validatePassword(req.body.new_password, 'New password'), BCRYPT_ROUNDS);
     changes.push('password reset');
     bumpTokenVersion = true;
   }
 
-  if (changes.length === 0) {
-    res.status(400).json({ error: 'Nothing to update' });
-    return;
-  }
+  if (changes.length === 0) fail('Nothing to update');
 
   db.prepare(`
     UPDATE users
     SET is_active = ?, password = ?, token_version = token_version + ?
     WHERE id = ?
-  `).run(nextActive, nextPassword, bumpTokenVersion ? 1 : 0, id);
+  `).run(nextActive, nextPassword, bumpTokenVersion ? 1 : 0, account.id);
 
   writeAuditLog({
     user: req.user,
     action: 'update',
-    entityType: 'cashier',
-    entityId: id,
-    details: `Cashier ${cashier.username}: ${changes.join(', ')}`,
+    entityType: account.role,
+    entityId: account.id,
+    details: `${account.role === 'admin' ? 'Admin' : 'Cashier'} ${account.username}: ${changes.join(', ')}`,
   });
+  return readStaff(account.id);
+};
 
-  res.json(db.prepare('SELECT id, username, role, name, is_active FROM users WHERE id = ?').get(id));
+const staffRole = (value: unknown): StaffRole => {
+  if (value !== 'admin' && value !== 'cashier') fail('Choose a role: admin or cashier.');
+  return value as StaffRole;
+};
+
+/**
+ * Every record that names the person who made it. An account that appears in
+ * any of these is part of the shop's books and can only be deactivated;
+ * deleting it would orphan its bills, purchases and audit trail.
+ */
+const USER_REFERENCES: Array<[table: string, column: string]> = [
+  ['bills', 'user_id'],
+  ['purchases', 'user_id'],
+  ['audit_logs', 'user_id'],
+  ['customer_credit_entries', 'user_id'],
+  ['stock_adjustments', 'user_id'],
+  ['supplier_payments', 'user_id'],
+  ['print_jobs', 'requested_by'],
+];
+const userInUseSql = (idExpression: string) =>
+  USER_REFERENCES.map(([table, column]) => `EXISTS (SELECT 1 FROM ${table} WHERE ${column} = ${idExpression})`).join(' OR ');
+
+app.get('/api/users', authenticateToken, requireAdmin, (_req, res) => {
+  // Admins first, then by name; deactivated accounts last within each.
+  res.json(db.prepare(`
+    SELECT ${STAFF_COLUMNS}, (${userInUseSql('users.id')}) AS in_use FROM users
+    ORDER BY role = 'admin' DESC, is_active DESC, name COLLATE NOCASE ASC
+  `).all());
+});
+
+/**
+ * Delete an account that was never used: a typo, or someone who never started.
+ * Once a person has signed in (which the audit log records), billed or bought,
+ * their name is on the shop's records, so they are deactivated instead.
+ */
+app.delete('/api/users/:id', authenticateToken, requireAdmin, route((req, res) => {
+  const account = db.prepare('SELECT * FROM users WHERE id = ?').get(rowId(req.params.id)) as any;
+  if (!account) {
+    res.status(404).json({ error: 'Account not found' });
+    return;
+  }
+  if (account.id === req.user.id) fail('You cannot delete your own account.');
+
+  db.transaction(() => {
+    const { in_use } = db.prepare(`SELECT (${userInUseSql('?')}) AS in_use`)
+      .get(...USER_REFERENCES.map(() => account.id)) as { in_use: number };
+    if (in_use) {
+      const err = new ValidationError(
+        `${account.name} has already used the app (signed in, billed or similar), so the account is part of the shop's records and cannot be deleted. Deactivate it instead: they can no longer sign in, and their records are kept.`
+      );
+      err.code = 'ACCOUNT_IN_USE';
+      err.status = 409;
+      throw err;
+    }
+    db.prepare('DELETE FROM users WHERE id = ?').run(account.id);
+    writeAuditLog({
+      user: req.user,
+      action: 'delete',
+      entityType: account.role,
+      entityId: account.id,
+      details: `Deleted unused ${account.role} account ${account.username} (${account.name})`,
+    });
+  })();
+
+  res.json({ success: true });
+}));
+
+app.post('/api/users', authenticateToken, requireAdmin, route((req, res) => {
+  // No default: whoever creates the account has to say which it is.
+  const role = staffRole(req.body?.role);
+  res.status(201).json(createStaffAccount(req, role));
+}));
+
+app.put('/api/users/:id', authenticateToken, requireAdmin, route((req, res) => {
+  const account = db.prepare('SELECT * FROM users WHERE id = ?').get(rowId(req.params.id));
+  if (!account) {
+    res.status(404).json({ error: 'Account not found' });
+    return;
+  }
+  res.json(updateStaffAccount(req, account));
+}));
+
+// The cashier-only routes the app used before admins could be created here.
+// Kept so older callers keep working; they cannot see or touch admin accounts.
+app.get('/api/cashiers', authenticateToken, requireAdmin, (_req, res) => {
+  res.json(db.prepare(`SELECT ${STAFF_COLUMNS} FROM users WHERE role = 'cashier' ORDER BY name ASC`).all());
+});
+
+app.post('/api/cashiers', authenticateToken, requireAdmin, route((req, res) => {
+  res.status(201).json(createStaffAccount(req, 'cashier'));
+}));
+
+app.put('/api/cashiers/:id', authenticateToken, requireAdmin, route((req, res) => {
+  const cashier = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'cashier'").get(rowId(req.params.id));
+  if (!cashier) {
+    res.status(404).json({ error: 'Cashier not found' });
+    return;
+  }
+  res.json(updateStaffAccount(req, cashier));
 }));
 
 // --- Audit Log Routes ---
@@ -2178,6 +2264,7 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
     const lineItems: Array<{
       item_id: number;
       amounts: ReturnType<typeof computeLine>;
+      rates: ReturnType<typeof lineGstRates>;
       allocations: Array<{ batch_id: number; quantity: number }>;
     }> = [];
     const touchedItems = new Set<number>();
@@ -2233,6 +2320,7 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
         lineItems.push({
           item_id: dbItem.id,
           amounts,
+          rates: lineGstRates(dbItem),
           allocations: segment.allocations.map(({ batch_id, quantity }) => ({ batch_id, quantity })),
         });
       }
@@ -2307,8 +2395,11 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
     const bill_id = Number(billResult.lastInsertRowid);
 
     const insertBillItem = db.prepare(`
-      INSERT INTO bill_items (bill_id, item_id, quantity, price, unit_price, sgst_amount, cgst_amount, igst_amount, total_amount)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO bill_items (
+        bill_id, item_id, quantity, price, unit_price, sgst_amount, cgst_amount, igst_amount, total_amount,
+        sgst_rate, cgst_rate, igst_rate
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertAllocation = db.prepare(
       'INSERT INTO bill_item_batches (bill_item_id, batch_id, quantity, unit_cost) VALUES (?, ?, ?, ?)'
@@ -2323,10 +2414,11 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
     `);
 
     for (const line of lineItems) {
-      const { amounts } = line;
+      const { amounts, rates } = line;
       const billItem = insertBillItem.run(
         bill_id, line.item_id, amounts.quantity, amounts.price, amounts.unit_price,
-        amounts.sgst_amount, amounts.cgst_amount, amounts.igst_amount, amounts.total_amount
+        amounts.sgst_amount, amounts.cgst_amount, amounts.igst_amount, amounts.total_amount,
+        rates.sgst_rate, rates.cgst_rate, rates.igst_rate
       );
       const billItemId = Number(billItem.lastInsertRowid);
 
@@ -2433,12 +2525,31 @@ app.get('/api/bills/:id', authenticateToken, route((req, res) => {
     return;
   }
 
-  const items = db.prepare(`
-    SELECT bi.*, i.name as item_name, i.hsn_code, i.metric
+  const rows = db.prepare(`
+    SELECT bi.*, i.name as item_name, i.hsn_code, i.metric,
+      i.gst_applicable AS item_gst_applicable, i.gst_mode AS item_gst_mode, i.gst_rate AS item_gst_rate,
+      i.sgst_rate AS item_sgst_rate, i.cgst_rate AS item_cgst_rate, i.igst_rate AS item_igst_rate
     FROM bill_items bi
     JOIN items i ON bi.item_id = i.id
     WHERE bi.bill_id = ?
-  `).all((bill as any).id);
+  `).all((bill as any).id) as any[];
+
+  // Lines written before bill_items kept their rates have NULL there. The
+  // invoice still needs a slab to print, so use the item's rates today; a line
+  // that carried no tax had none.
+  const items = rows.map(({
+    item_gst_applicable, item_gst_mode, item_gst_rate, item_sgst_rate, item_cgst_rate, item_igst_rate, ...line
+  }) => {
+    if (line.sgst_rate != null) return line;
+    const taxed = line.sgst_amount + line.cgst_amount + (line.igst_amount || 0) > 0;
+    const rates = taxed
+      ? lineGstRates({
+          gst_applicable: item_gst_applicable, gst_mode: item_gst_mode, gst_rate: item_gst_rate,
+          sgst_rate: item_sgst_rate, cgst_rate: item_cgst_rate, igst_rate: item_igst_rate,
+        })
+      : { sgst_rate: 0, cgst_rate: 0, igst_rate: 0 };
+    return { ...line, ...rates };
+  });
 
   res.json({ ...bill as object, items });
 }));
@@ -3078,12 +3189,21 @@ app.get('/api/purchases', authenticateToken, requireAdmin, route((req, res) => {
   // with more than 1000 purchases showed no purchases at all.
   const from = optDate(req.query.from, 'from');
   const to = optDate(req.query.to, 'to');
+  // Purchase history's search box: the purchase or supplier invoice number,
+  // the supplier, or an item on the purchase.
+  const search = optString(req.query.search, 'search', 100);
 
   const IST_P = "date(datetime(p.created_at, '+5 hours', '+30 minutes'))";
   const where: string[] = [];
   const params: any[] = [];
   if (from) { where.push(`${IST_P} >= ?`); params.push(from); }
   if (to) { where.push(`${IST_P} <= ?`); params.push(to); }
+  if (search) {
+    const like = `%${search}%`;
+    where.push(`(p.purchase_number LIKE ? OR p.supplier_name LIKE ? OR p.invoice_number LIKE ?
+      OR EXISTS (SELECT 1 FROM purchase_items pi WHERE pi.purchase_id = p.id AND pi.item_name LIKE ?))`);
+    params.push(like, like, like, like);
+  }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
   const purchases = db.prepare(`

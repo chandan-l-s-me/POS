@@ -39,7 +39,7 @@ before(async () => {
   assert.equal(created.status, 200);
   billId = created.body.bill_id;
   billNumber = created.body.bill_number;
-  assert.equal(created.body.subtotal_amount, 221.65);
+  assert.equal(created.body.subtotal_amount, 222.19);
 });
 
 after(async () => { await server?.stop(); });
@@ -54,7 +54,7 @@ describe('upgrading a database that predates subtotal_amount', () => {
     // outright is what an older build's schema looks like.
     const raw = new Database(dbPath);
     const before = raw.prepare('SELECT * FROM bills WHERE id = ?').get(billId) as any;
-    assert.equal(before.subtotal_amount, 221.65);
+    assert.equal(before.subtotal_amount, 222.19);
     raw.exec('ALTER TABLE bills DROP COLUMN subtotal_amount');
     const columns = raw.prepare('PRAGMA table_info(bills)').all() as Array<{ name: string }>;
     assert.ok(!columns.some((c) => c.name === 'subtotal_amount'), 'column should be gone');
@@ -74,7 +74,7 @@ describe('upgrading a database that predates subtotal_amount', () => {
       assert.equal(bill.tax_amount, before.tax_amount);
       assert.equal(
         bill.subtotal_amount,
-        221.65,
+        222.19,
         'the subtotal must be rebuilt from the line items, so old invoices reprint unchanged'
       );
 
@@ -91,7 +91,7 @@ describe('upgrading a database that predates subtotal_amount', () => {
         payment_method: 'cash',
       });
       assert.equal(fresh.status, 200);
-      assert.equal(fresh.body.subtotal_amount, 221.65);
+      assert.equal(fresh.body.subtotal_amount, 222.19);
       assert.notEqual(fresh.body.bill_number, billNumber, 'numbering continues rather than repeating');
     } finally {
       await upgraded.stop();
@@ -104,7 +104,7 @@ describe('upgrading a database that predates subtotal_amount', () => {
       const c = client(again.baseUrl);
       assert.equal((await c.login('admin', ADMIN_PASSWORD)).status, 200);
       const bill = (await c.get(`/api/bills/${billId}`)).body;
-      assert.equal(bill.subtotal_amount, 221.65);
+      assert.equal(bill.subtotal_amount, 222.19);
       assert.equal(bill.bill_number, billNumber);
     } finally {
       await again.stop();

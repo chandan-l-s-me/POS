@@ -5,6 +5,13 @@ export interface User {
   name: string;
 }
 
+/** A user as the staff list shows it. SQLite hands booleans back as 0/1. */
+export interface StaffAccount extends User {
+  is_active: number;
+  /** 1 once the account has signed in or made any record; it can then only be deactivated. */
+  in_use?: number;
+}
+
 export interface AuditLog {
   id: number;
   user_id: number;
@@ -157,6 +164,10 @@ export interface BillItem {
   cgst_amount: number;
   igst_amount?: number;
   total_amount: number;
+  /** GST rates (%) the line was charged at. */
+  sgst_rate?: number;
+  cgst_rate?: number;
+  igst_rate?: number;
 }
 
 export interface Bill {

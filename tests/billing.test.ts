@@ -58,17 +58,36 @@ describe('bill arithmetic', () => {
 
     const line = bill.items[0];
     assert.equal(line.total_amount, 354);          // 118 x 3, GST-inclusive
-    assert.equal(line.sgst_amount, 31.86);         // 354 x 9%
-    assert.equal(line.cgst_amount, 31.86);
+    assert.equal(line.sgst_amount, 27);            // 354 = 300 taxable + 18% GST; 9% of 300
+    assert.equal(line.cgst_amount, 27);
     assert.equal(line.igst_amount, 0);
 
     const taxable = round2(line.total_amount - line.sgst_amount - line.cgst_amount - line.igst_amount);
-    assert.equal(taxable, 290.28);
+    assert.equal(taxable, 300);
     // The identity the invoice depends on.
     assert.equal(round2(taxable + line.sgst_amount + line.cgst_amount + line.igst_amount), line.total_amount);
 
-    assert.equal(bill.tax_amount, 63.72);
+    assert.equal(bill.tax_amount, 54);
     assert.equal(bill.total_amount, 354);
+  });
+
+  it('takes GST out of the inclusive price, so the invoice shows the real slab', async () => {
+    // A 5% item at 785 used to be taxed 2.5% of 785 each side (19.63), which
+    // printed as a 2.63% slab on a 745.74 taxable value.
+    const item = await makeItem({ price: 785, gst_rate: 5, sgst_rate: 2.5, cgst_rate: 2.5 });
+    const created = await admin.post('/api/bills', {
+      items: [{ id: item.id, quantity: 1 }],
+      payment_method: 'cash',
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+
+    const line = (await admin.get(`/api/bills/${created.body.bill_id}`)).body.items[0];
+    assert.equal(line.cgst_amount, 18.69);
+    assert.equal(line.sgst_amount, 18.69);
+    assert.equal(round2(line.total_amount - line.sgst_amount - line.cgst_amount), 747.62);
+    assert.equal(line.cgst_rate, 2.5, 'the rate charged is stored on the line');
+    assert.equal(line.sgst_rate, 2.5);
+    assert.equal(line.igst_rate, 0);
   });
 
   it('charges IGST instead of SGST/CGST for an inter-state item', async () => {
@@ -83,9 +102,9 @@ describe('bill arithmetic', () => {
     const line = bill.items[0];
     assert.equal(line.sgst_amount, 0);
     assert.equal(line.cgst_amount, 0);
-    assert.equal(line.igst_amount, 48);            // 400 x 12%
+    assert.equal(line.igst_amount, 42.86);         // 400 = 357.14 taxable + 12% GST
     assert.equal(line.total_amount, 400);
-    assert.equal(bill.tax_amount, 48);
+    assert.equal(bill.tax_amount, 42.86);
     assert.equal(bill.total_amount, 400);
   });
 
@@ -171,7 +190,7 @@ describe('bill arithmetic', () => {
     const bill = (await admin.get(`/api/bills/${created.body.bill_id}`)).body;
     assert.equal(bill.items[0].quantity, 0.25);
     assert.equal(bill.items[0].total_amount, 60);
-    assert.equal(bill.items[0].sgst_amount, 1.5);
+    assert.equal(bill.items[0].sgst_amount, 1.43);   // 60 = 57.14 taxable + 5% GST
   });
 });
 
@@ -196,9 +215,9 @@ describe('the client cannot dictate money', () => {
       payment_method: 'cash',
     });
     const bill = (await admin.get(`/api/bills/${created.body.bill_id}`)).body;
-    assert.equal(bill.items[0].sgst_amount, 10.62);
+    assert.equal(bill.items[0].sgst_amount, 9);
     assert.equal(bill.items[0].igst_amount, 0);
-    assert.equal(bill.tax_amount, 21.24);
+    assert.equal(bill.tax_amount, 18);
   });
 
   it('rejects a negative discount', async () => {
@@ -563,13 +582,13 @@ describe('the stored subtotal', () => {
       payment_method: 'cash',
     });
     assert.equal(created.status, 200);
-    assert.equal(created.body.subtotal_amount, 221.65, 'the create response carries it');
+    assert.equal(created.body.subtotal_amount, 222.19, 'the create response carries it');
 
     const single = (await admin.get(`/api/bills/${created.body.bill_id}`)).body;
-    assert.equal(single.subtotal_amount, 221.65);
+    assert.equal(single.subtotal_amount, 222.19);
 
     const listed = (await admin.get(`/api/bills?search=${created.body.bill_number}`)).body.data[0];
-    assert.equal(listed.subtotal_amount, 221.65, 'the list carries it too');
+    assert.equal(listed.subtotal_amount, 222.19, 'the list carries it too');
 
     // The three figures on the invoice must reconcile against each other.
     assert.equal(

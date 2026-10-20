@@ -119,6 +119,7 @@ describe('role enforcement', () => {
   // silently left ungated.
   const adminOnlyGets = [
     '/api/cashiers',
+    '/api/users',
     '/api/suppliers',
     '/api/purchases',
     '/api/analytics',
@@ -302,5 +303,130 @@ describe('admin account changes', () => {
       username: 'admin', current_password: 'rotated-pass-9', new_password: ADMIN_PASSWORD,
     })).status, 200);
     await admin.login('admin', ADMIN_PASSWORD);
+  });
+});
+
+describe('staff accounts', () => {
+  let adminId: number;
+
+  before(async () => {
+    adminId = (await client(server.baseUrl).login('admin', ADMIN_PASSWORD)).body.user.id;
+  });
+
+  it('refuses an account without a role, so the creator has to choose', async () => {
+    const res = await admin.post('/api/users', { name: 'No Role', username: 'no-role', password: 'no-role-pass-1' });
+    assert.equal(res.status, 400);
+    const bogus = await admin.post('/api/users', { name: 'Owner', username: 'owner-role', password: 'owner-pass-12', role: 'owner' });
+    assert.equal(bogus.status, 400);
+  });
+
+  it('creates an admin who signs in with admin rights', async () => {
+    const created = await admin.post('/api/users', {
+      name: 'Second Admin', username: 'second-admin', password: 'second-admin-1', role: 'admin',
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.equal(created.body.role, 'admin');
+    assert.equal(created.body.password, undefined, 'the hash never leaves the server');
+
+    const second = client(server.baseUrl);
+    const login = await second.login('second-admin', 'second-admin-1');
+    assert.equal(login.body.user.role, 'admin');
+    assert.equal((await second.get('/api/audit-logs')).status, 200);
+  });
+
+  it('creates a cashier who cannot manage staff', async () => {
+    const created = await admin.post('/api/users', {
+      name: 'New Cashier', username: 'new-cashier', password: 'new-cashier-1', role: 'cashier',
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const cashier = client(server.baseUrl);
+    await cashier.login('new-cashier', 'new-cashier-1');
+    assert.equal((await cashier.get('/api/users')).status, 403);
+    assert.equal((await cashier.post('/api/users', {
+      name: 'Sneaky', username: 'sneaky', password: 'sneaky-pass-1', role: 'admin',
+    })).status, 403);
+  });
+
+  it('lists admins and cashiers together, without password hashes', async () => {
+    const list = (await admin.get('/api/users')).body as any[];
+    assert.ok(list.some((u) => u.username === 'second-admin' && u.role === 'admin'));
+    assert.ok(list.some((u) => u.username === 'new-cashier' && u.role === 'cashier'));
+    assert.ok(list.every((u) => u.password === undefined && u.token_version === undefined));
+  });
+
+  it('refuses to let an admin deactivate their own account', async () => {
+    const res = await admin.put(`/api/users/${adminId}`, { is_active: false });
+    assert.equal(res.status, 400);
+    assert.equal((await admin.get('/api/settings')).status, 200, 'still signed in');
+  });
+
+  it('sends an admin to My account for their own password', async () => {
+    const res = await admin.put(`/api/users/${adminId}`, { new_password: 'self-reset-pass-1' });
+    assert.equal(res.status, 400);
+    assert.equal((await client(server.baseUrl).login('admin', ADMIN_PASSWORD)).status, 200, 'password unchanged');
+  });
+
+  it('lets an admin deactivate another admin, signing them out at once', async () => {
+    const second = client(server.baseUrl);
+    await second.login('second-admin', 'second-admin-1');
+    const id = ((await admin.get('/api/users')).body as any[]).find((u) => u.username === 'second-admin').id;
+
+    const res = await admin.put(`/api/users/${id}`, { is_active: false });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.is_active, 0);
+    assert.equal((await second.get('/api/audit-logs')).status, 401);
+    assert.equal((await client(server.baseUrl).login('second-admin', 'second-admin-1')).status, 401);
+  });
+
+  it('keeps the old cashier route away from admin accounts', async () => {
+    assert.equal((await admin.put(`/api/cashiers/${adminId}`, { is_active: false })).status, 404);
+    const cashiers = (await admin.get('/api/cashiers')).body as any[];
+    assert.ok(cashiers.every((u) => u.role === 'cashier'));
+  });
+});
+
+describe('deleting staff accounts', () => {
+  const create = async (username: string, role: 'admin' | 'cashier' = 'cashier') => {
+    const res = await admin.post('/api/users', { name: `Delete ${username}`, username, password: `${username}-pass-1`, role });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    return res.body.id as number;
+  };
+  const listed = async (id: number) => ((await admin.get('/api/users')).body as any[]).find((u) => u.id === id);
+
+  it('deletes an account that never signed in, admin or cashier', async () => {
+    for (const role of ['cashier', 'admin'] as const) {
+      const id = await create(`unused-${role}`, role);
+      assert.equal((await listed(id)).in_use, 0);
+      const res = await admin.del(`/api/users/${id}`);
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      assert.equal(await listed(id), undefined);
+      assert.equal((await client(server.baseUrl).login(`unused-${role}`, `unused-${role}-pass-1`)).status, 401);
+    }
+  });
+
+  it('keeps an account that has signed in, and says to deactivate it', async () => {
+    const id = await create('used-cashier');
+    assert.equal((await client(server.baseUrl).login('used-cashier', 'used-cashier-pass-1')).status, 200);
+    assert.equal((await listed(id)).in_use, 1);
+
+    const res = await admin.del(`/api/users/${id}`);
+    assert.equal(res.status, 409);
+    assert.equal(res.body.code, 'ACCOUNT_IN_USE');
+    assert.match(res.body.error, /Deactivate/);
+    assert.ok(await listed(id), 'the account is still there');
+  });
+
+  it('refuses to delete your own account', async () => {
+    const adminId = (await client(server.baseUrl).login('admin', ADMIN_PASSWORD)).body.user.id;
+    assert.equal((await admin.del(`/api/users/${adminId}`)).status, 400);
+  });
+
+  it('is for admins only, and 404s on an unknown account', async () => {
+    await create('delete-gate');
+    const cashier = client(server.baseUrl);
+    await cashier.login('delete-gate', 'delete-gate-pass-1');
+    const target = await create('delete-target');
+    assert.equal((await cashier.del(`/api/users/${target}`)).status, 403);
+    assert.equal((await admin.del('/api/users/999999')).status, 404);
   });
 });

@@ -5,13 +5,15 @@ import { useDataStore } from '../store/useDataStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { 
   Search, 
-  Calendar, 
   Printer, 
   ChevronRight, 
   Download,
   Trash2,
   X
 } from 'lucide-react';
+import { DateFilterButton, DateFilterPanel } from '../components/DateFilter';
+import { PurchaseHistory } from '../components/PurchaseHistory';
+import { SalesPurchaseSwitch, useTradeView } from '../components/SalesPurchaseSwitch';
 import { motion, AnimatePresence } from 'motion/react';
 // Not useReactToPrint directly: printing must not drop the till out of full screen.
 import { usePrint } from '../hooks/usePrint';
@@ -41,7 +43,24 @@ const subtotalOf = (bill: Bill) => {
   return Math.round((fromLines + Number.EPSILON) * 100) / 100;
 };
 
+/**
+ * Sales history for everyone; purchase history too for admins, who can see
+ * purchases. Which one is open is in the address (?view=purchases), so the
+ * menu can link straight to either.
+ */
 export const History = () => {
+  const isAdmin = useAuthStore((state) => state.user?.role === 'admin');
+  const [view, setView] = useTradeView(isAdmin);
+
+  return (
+    <div className="space-y-6">
+      {isAdmin && <SalesPurchaseSwitch value={view} onChange={setView} id="history" />}
+      {view === 'purchases' ? <PurchaseHistory /> : <SalesHistory />}
+    </div>
+  );
+};
+
+const SalesHistory = () => {
   const settings = useDataStore((state) => state.settings);
   const refreshItems = useDataStore((state) => state.refreshItems);
   const isAdmin = useAuthStore((state) => state.user?.role === 'admin');
@@ -200,12 +219,6 @@ export const History = () => {
     URL.revokeObjectURL(downloadUrl);
   };
 
-  const clearDateFilter = () => {
-    setStartDate('');
-    setEndDate('');
-  };
-
-  const hasDateFilter = Boolean(startDate || endDate);
 
   const handleViewBill = async (id: number) => {
     try {
@@ -259,18 +272,7 @@ export const History = () => {
           />
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => setShowDateFilter((current) => !current)}
-            className={cn(
-              "flex items-center gap-2 px-4 py-3 bg-white border text-gray-600 font-bold rounded-2xl transition-all",
-              hasDateFilter
-                ? "border-orange-300 text-orange-700 bg-orange-50"
-                : "border-gray-200 hover:bg-gray-50"
-            )}
-          >
-            <Calendar size={20} />
-            {hasDateFilter ? 'Date Filter Applied' : 'Filter by Date'}
-          </button>
+          <DateFilterButton from={startDate} to={endDate} open={showDateFilter} onClick={() => setShowDateFilter((current) => !current)} />
           <button
             onClick={handleExportCsv}
             disabled={exporting}
@@ -283,47 +285,13 @@ export const History = () => {
       </div>
 
       {showDateFilter && (
-        <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6">
-          <div className="flex items-center justify-between gap-4 mb-4">
-            <div>
-              <h2 className="text-lg font-bold text-gray-900">Filter By Date</h2>
-              <p className="text-sm text-gray-500">Bills and CSV export will follow this selected date range.</p>
-            </div>
-            {hasDateFilter && (
-              <button
-                type="button"
-                onClick={clearDateFilter}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-gray-100 text-gray-700 font-semibold hover:bg-gray-200 transition-all"
-              >
-                <X size={16} />
-                Clear Filter
-              </button>
-            )}
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="space-y-2">
-              <span className="text-sm font-semibold text-gray-700">From Date</span>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none"
-              />
-            </label>
-
-            <label className="space-y-2">
-              <span className="text-sm font-semibold text-gray-700">To Date</span>
-              <input
-                type="date"
-                value={endDate}
-                min={startDate || undefined}
-                onChange={(e) => setEndDate(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none"
-              />
-            </label>
-          </div>
-        </div>
+        <DateFilterPanel
+          from={startDate}
+          to={endDate}
+          onFromChange={setStartDate}
+          onToChange={setEndDate}
+          description="Bills and CSV export will follow this selected date range."
+        />
       )}
 
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
@@ -376,6 +344,7 @@ export const History = () => {
                   <td className="px-8 py-4 text-right">
                     <button 
                       onClick={() => handleViewBill(bill.id)}
+                      aria-label={`View bill ${bill.bill_number}`}
                       className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-xl transition-all"
                     >
                       <ChevronRight size={20} />

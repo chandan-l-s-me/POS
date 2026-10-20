@@ -50,9 +50,11 @@ export async function startServer(env: Record<string, string> = {}): Promise<Tes
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vyapara-test-'));
   const dbPath = path.join(dir, 'pos.db');
 
+  // Node with tsx as a loader, not `npx tsx`: Windows cannot spawn npx (a .cmd)
+  // without a shell, and this way the server is one process that kill() stops.
   const child: ChildProcessWithoutNullStreams = spawn(
-    'npx',
-    ['tsx', 'server.ts'],
+    process.execPath,
+    ['--import', 'tsx', 'server.ts'],
     {
       cwd: ROOT,
       env: {

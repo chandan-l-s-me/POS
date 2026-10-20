@@ -20,7 +20,6 @@ import { PaymentsDone } from './pages/PaymentsDone';
 import { Reports } from './pages/Reports';
 import { Dashboard } from './pages/Dashboard';
 import { Settings } from './pages/Settings';
-import { Logs } from './pages/Logs';
 import { QuickBill } from './pages/QuickBill';
 import { useHsnScanner } from './hooks/useHsnScanner';
 
@@ -144,11 +143,8 @@ const AppRoutes = () => {
         </ProtectedRoute>
       } />
 
-      <Route path="/logs" element={
-        <ProtectedRoute roles={['admin']}>
-          <Logs />
-        </ProtectedRoute>
-      } />
+      {/* The activity log moved under Settings; old links and bookmarks land there. */}
+      <Route path="/logs" element={<Navigate to="/settings#logs" replace />} />
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

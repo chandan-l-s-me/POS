@@ -1,8 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Search, Save } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { create } from 'zustand';
+import { Eraser, Search, Save } from 'lucide-react';
 import { api } from '../api';
 import { Item, Purchase, Supplier } from '../types';
+import { useAuthStore } from '../store/useAuthStore';
 import { useDataStore } from '../store/useDataStore';
 import { formatDateTimeInIST, cn } from '../lib/utils';
 import { round2, saleGstRate, type TaxableItem } from '../lib/billMath';
@@ -148,6 +151,62 @@ const normalizeRows = (rows: PurchaseRowState[]) => {
   return [...meaningfulRows, createEmptyRow()];
 };
 
+const createEmptyForm = () => ({
+  supplier_name: '',
+  supplier_phone: '',
+  supplier_address: '',
+  supplier_gstin: '',
+  invoice_number: '',
+  invoice_date: getTodayDateValue(),
+  notes: '',
+});
+
+/**
+ * The purchase being entered. Kept in a store rather than in the page, as the
+ * billing cart is, so going to another page and back does not lose a half-typed
+ * supplier invoice; it goes only when the purchase is saved or Clear is pressed
+ * (or someone signs out). Like the cart, it does not survive reloading the app.
+ */
+const emptyDraft = () => ({
+  form: createEmptyForm(),
+  rows: [createEmptyRow()],
+  payment: createEmptyPayment(),
+  supplierQuery: '',
+});
+type PurchaseDraft = ReturnType<typeof emptyDraft>;
+
+const usePurchaseDraft = create<PurchaseDraft & { reset: () => void }>()((set) => ({
+  ...emptyDraft(),
+  reset: () => set(emptyDraft()),
+}));
+
+// A purchase half-entered by one person is not left for the next to sign in.
+useAuthStore.subscribe((state, previous) => {
+  if (previous.token && !state.token) usePurchaseDraft.getState().reset();
+});
+
+const isDraftEmpty = (draft: PurchaseDraft) => {
+  const blank = createEmptyForm();
+  return (
+    draft.supplierQuery.trim() === '' &&
+    (Object.keys(blank) as Array<keyof typeof blank>).every((key) => key === 'invoice_date' || draft.form[key].trim() === '') &&
+    draft.rows.every(isRowEmpty)
+  );
+};
+
+/** useState, but held in the draft store so it outlives the page. */
+const useDraftField = <K extends keyof PurchaseDraft>(key: K) => {
+  const value = usePurchaseDraft((state) => state[key]);
+  const setValue = useCallback(
+    (next: PurchaseDraft[K] | ((current: PurchaseDraft[K]) => PurchaseDraft[K])) =>
+      usePurchaseDraft.setState((state) => ({
+        [key]: typeof next === 'function' ? (next as (current: PurchaseDraft[K]) => PurchaseDraft[K])(state[key]) : next,
+      }) as Partial<PurchaseDraft>),
+    [key]
+  );
+  return [value, setValue] as const;
+};
+
 const normalizeSupplierKey = (value: string) => value.trim().toLowerCase();
 
 const getItemHsnCode = (item: Item | undefined) => {
@@ -199,21 +258,13 @@ export const Purchases = () => {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [supplierQuery, setSupplierQuery] = useState('');
+  const [supplierQuery, setSupplierQuery] = useDraftField('supplierQuery');
   const [showSupplierSuggestions, setShowSupplierSuggestions] = useState(false);
   const [activeItemRow, setActiveItemRow] = useState<number | null>(null);
   const itemInputRefs = useRef(new Map<number, HTMLInputElement>());
-  const [form, setForm] = useState({
-    supplier_name: '',
-    supplier_phone: '',
-    supplier_address: '',
-    supplier_gstin: '',
-    invoice_number: '',
-    invoice_date: getTodayDateValue(),
-    notes: '',
-  });
-  const [rows, setRows] = useState<PurchaseRowState[]>([createEmptyRow()]);
-  const [payment, setPayment] = useState(createEmptyPayment);
+  const [form, setForm] = useDraftField('form');
+  const [rows, setRows] = useDraftField('rows');
+  const [payment, setPayment] = useDraftField('payment');
 
   useEffect(() => {
     Promise.all([api.getPurchases(), api.getPurchaseItemReport(), api.getSuppliers()])
@@ -288,6 +339,7 @@ export const Purchases = () => {
         min="0"
         step="0.01"
         value={typed ? row.cost || '' : derived > 0 ? round2(derived) : ''}
+        aria-label={`Cost per unit ${basis === 'before_gst' ? 'before' : 'after'} GST`}
         onChange={(e) => upsertRow(rowIndex, { cost: e.target.value === '' ? 0 : Number(e.target.value), cost_basis: basis })}
         onKeyDown={enterAdvances}
         title={
@@ -386,20 +438,15 @@ export const Purchases = () => {
   );
 
   const resetForm = () => {
-    setSupplierQuery('');
     setShowSupplierSuggestions(false);
     setActiveItemRow(null);
-    setForm({
-      supplier_name: '',
-      supplier_phone: '',
-      supplier_address: '',
-      supplier_gstin: '',
-      invoice_number: '',
-      invoice_date: getTodayDateValue(),
-      notes: '',
-    });
-    setRows([createEmptyRow()]);
-    setPayment(createEmptyPayment());
+    usePurchaseDraft.getState().reset();
+  };
+
+  const draftStarted = !isDraftEmpty(usePurchaseDraft());
+  const clearDraft = () => {
+    if (draftStarted && !window.confirm('Clear this purchase? Everything entered here will be removed.')) return;
+    resetForm();
   };
 
   const computedRows = useMemo(() => {
@@ -804,6 +851,7 @@ export const Purchases = () => {
                       <tr key={rowIndex} className={cn('align-top', isTrailingEmpty && 'bg-orange-50/30')}>
                         <td className="pl-4 pr-2 py-2.5">
                           <input
+                            aria-label="Item"
                             ref={(element) => {
                               if (element) itemInputRefs.current.set(rowIndex, element);
                               else itemInputRefs.current.delete(rowIndex);
@@ -890,6 +938,7 @@ export const Purchases = () => {
                         <td className="px-2 py-2.5">
                           {isNew ? (
                             <input
+                              aria-label="HSN code"
                               data-purchase-nav="true"
                               type="text"
                               value={row.hsn_code}
@@ -907,6 +956,7 @@ export const Purchases = () => {
 
                         <td className="px-2 py-2.5">
                           <select
+                            aria-label="Unit"
                             data-purchase-nav="true"
                             value={unit}
                             disabled={!isNew}
@@ -931,6 +981,7 @@ export const Purchases = () => {
 
                         <td className="px-2 py-2.5">
                           <input
+                            aria-label="Quantity"
                             data-purchase-nav="true"
                             type="number"
                             inputMode="decimal"
@@ -947,6 +998,7 @@ export const Purchases = () => {
 
                         <td className="px-2 py-2.5">
                           <select
+                            aria-label="GST"
                             data-purchase-nav="true"
                             value={gstChoiceOf(row)}
                             onChange={(e) => {
@@ -969,6 +1021,7 @@ export const Purchases = () => {
 
                         <td className="px-2 py-2.5">
                           <input
+                            aria-label="Selling price incl. GST"
                             data-purchase-nav="true"
                             type="number"
                             inputMode="decimal"
@@ -1114,7 +1167,19 @@ export const Purchases = () => {
               )}
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <p className="mr-auto text-sm text-gray-500">
+                {draftStarted ? 'Kept if you go to another page, until you save or clear it.' : ''}
+              </p>
+              <button
+                type="button"
+                onClick={clearDraft}
+                disabled={saving || !draftStarted}
+                className="inline-flex items-center gap-2 px-5 py-4 rounded-2xl border border-gray-200 bg-white font-bold text-gray-700 hover:bg-gray-50 transition-all disabled:opacity-50"
+              >
+                <Eraser size={18} />
+                Clear
+              </button>
               <button
                 type="submit"
                 disabled={saving}
@@ -1129,9 +1194,14 @@ export const Purchases = () => {
       </div>
 
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="px-6 py-5 border-b border-gray-100">
-          <h2 className="text-xl font-bold text-gray-900">Recent Purchases</h2>
-          <p className="text-sm text-gray-500">Latest purchase entries saved in the system.</p>
+        <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-5 border-b border-gray-100">
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">Recent Purchases</h2>
+            <p className="text-sm text-gray-500">Latest purchase entries saved in the system.</p>
+          </div>
+          <Link to="/history?view=purchases" className="text-sm font-bold text-orange-600 hover:underline">
+            Search all in Purchase history →
+          </Link>
         </div>
 
         <div className="overflow-x-auto">

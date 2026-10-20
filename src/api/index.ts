@@ -1,4 +1,5 @@
 import { useAuthStore } from '../store/useAuthStore';
+import type { StaffAccount, User } from '../types';
 
 const API_BASE = '/api';
 
@@ -82,8 +83,14 @@ export const api = {
   /** Returns the Google sign-in URL to send the browser to. */
   connectGoogleDrive: () => fetchWithAuth('/backups/google/connect', { method: 'POST' }),
   disconnectGoogleDrive: () => fetchWithAuth('/backups/google/disconnect', { method: 'POST' }),
-  getCashiers: () => fetchWithAuth('/cashiers'),
-  addCashier: (cashier: { name: string; username: string; password: string }) => fetchWithAuth('/cashiers', { method: 'POST', body: JSON.stringify(cashier) }),
+  // Staff accounts, admins and cashiers. The role is set once, at creation.
+  getUsers: (): Promise<StaffAccount[]> => fetchWithAuth('/users'),
+  addUser: (account: { name: string; username: string; password: string; role: User['role'] }): Promise<StaffAccount> =>
+    fetchWithAuth('/users', { method: 'POST', body: JSON.stringify(account) }),
+  updateUser: (id: number, payload: { is_active?: boolean; new_password?: string }): Promise<StaffAccount> =>
+    fetchWithAuth(`/users/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  /** Only an account that was never used; others are deactivated instead. */
+  deleteUser: (id: number) => fetchWithAuth(`/users/${id}`, { method: 'DELETE' }),
   
   // The catalogue is cached client-side so the billing screen can match a
   // scanned code without a round trip. It ships lean columns by default;
@@ -144,6 +151,8 @@ export const api = {
   deleteBill: (id: number) => fetchWithAuth(`/bills/${id}`, { method: 'DELETE' }),
 
   getPurchases: (params?: ListQuery) => fetchWithAuth(`/purchases${buildQuery(params)}`).then(unwrap),
+  /** One page of purchases with the total count, for Purchase history. */
+  getPurchasesPage: (params?: ListQuery) => fetchWithAuth(`/purchases${buildQuery(params)}`),
   getPurchase: (id: number) => fetchWithAuth(`/purchases/${id}`),
   createPurchase: (purchase: any) => fetchWithAuth('/purchases', { method: 'POST', body: JSON.stringify(purchase) }),
 
@@ -169,6 +178,4 @@ export const api = {
   getStock: () => fetchWithAuth('/stock'),
   getAuditLogs: (params?: ListQuery) => fetchWithAuth(`/audit-logs${buildQuery(params)}`).then(unwrap),
   getAuditLogsPage: (params?: ListQuery) => fetchWithAuth(`/audit-logs${buildQuery(params)}`),
-  updateCashier: (id: number, payload: { is_active?: boolean; new_password?: string }) =>
-    fetchWithAuth(`/cashiers/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
 };
