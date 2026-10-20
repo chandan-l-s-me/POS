@@ -13,7 +13,8 @@
     "test": "npm run build && tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:only": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "seed:demo": "tsx scripts/seed-demo.ts",
-    "android:build": "npx cap sync android && cd android && ./gradlew assembleRelease --no-daemon --project-cache-dir .gradle.nosync --max-workers=2"
+    "android:build": "npx cap sync android && cd android && ./gradlew assembleRelease --no-daemon --project-cache-dir .gradle.nosync --max-workers=2",
+    "package": "node scripts/package.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.3",

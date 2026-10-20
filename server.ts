@@ -1,11 +1,15 @@
+// First, before any other import: imported modules run before this file's own
+// code, and db/index.ts reads DB_PATH as it loads. When .env was loaded later
+// in this file, DB_PATH (and anything else read at import time) from .env was
+// ignored and the database was always ./pos.db in whatever folder the server
+// started in. See tests/env-file.test.ts.
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { createServer as createViteServer } from 'vite';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import dotenv from 'dotenv';
 import db, { dbPath, initDb, syncItemStock } from './db/index';
 import { createGoogleDrive } from './server/googleDrive';
 import { readPool } from './db/asyncRead';
@@ -23,7 +27,6 @@ import {
 } from './src/lib/billMath';
 import { isLooseUnit, UNIT_VALUES } from './src/lib/units';
 
-dotenv.config();
 
 // BigInt serialization fix
 (BigInt.prototype as any).toJSON = function () {
@@ -3752,6 +3755,9 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 // --- Vite Middleware ---
 async function startServer() {
   if (!IS_PRODUCTION) {
+    // Loaded only here: an installed shop runs in production, where the dev
+    // server is never used, and its package does not ship Vite at all.
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',

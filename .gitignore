@@ -24,3 +24,7 @@ coverage/
 # Google Drive connection (refresh token) for backups — a credential.
 google-drive.json
 google-drive.json.tmp
+
+# Client install packages (npm run package) and the downloaded service wrapper.
+/release/
+/installer/vendor/

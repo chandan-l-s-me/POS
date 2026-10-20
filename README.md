@@ -31,6 +31,41 @@ change it under Settings. If you would rather set it yourself, put it in
 | `npm run test:only` | Run the tests without rebuilding |
 | `npm run lint` | TypeScript type check |
 | `npm run seed:demo` | Load sample data (never on a real shop's database) |
+| `npm run package` | Build the installable package for a shop (see below) |
+
+### Giving it to a shop
+
+A shop never runs a command. `npm run package` builds
+`release/VyaparaBilling-<version>.zip`, which contains everything the shop's
+computer needs: the built app, the server bundled into one file, the Node.js
+runtime, and WinSW (MIT) to run it as a Windows service. Nothing has to be
+installed first.
+
+On the shop's computer, unzip it and double-click **Install Vyapara.bat**
+(one administrator prompt). It asks for the shop name, an admin password and an
+optional second backup folder, then:
+
+- copies the program to `C:\Program Files\VyaparaBilling`;
+- creates the data folder `C:\VyaparaData` (database, backups, logs), readable
+  only by administrators and the service;
+- writes a fresh `.env` with a new `JWT_SECRET` and nothing of yours (no Google
+  or Cloudflare settings);
+- registers the **Vyapara Billing** service: starts with Windows, restarts
+  itself if it stops, runs without anyone signed in;
+- creates the admin, removes the one-time password from `.env`, sets the shop
+  name, and adds a desktop / Start-menu icon that opens the app.
+
+A new version: build a new package and run **Update Vyapara.bat** from the new
+folder. It backs up the database (checked copy), swaps the program, and puts
+the previous version back if the new one does not start. **Uninstall
+Vyapara.bat** (or Settings > Apps) removes the program and keeps the data;
+installing again picks the data up. Every question can also be given as a
+parameter for unattended installs — see the top of `installer/scripts/install.ps1`.
+Records of each run go to `%TEMP%\VyaparaBilling-install.log` (and `-update`,
+`-uninstall`). `installer/README.txt` is the shop-facing version of this.
+
+The Cloudflare tunnel is not part of the installer: it needs the shop's own
+Cloudflare account and token (see *Remote access* below).
 
 ---
 
