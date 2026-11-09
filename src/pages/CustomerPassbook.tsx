@@ -15,6 +15,8 @@ import { api } from '../api';
 import { Bill, Customer, PassbookEntry, PassbookSummary } from '../types';
 import { cn, formatDateTimeInIST, getISTDateKey } from '../lib/utils';
 import { customerContactName, customerDisplayName } from '../lib/customer';
+import { t, tn, unitLabel } from '../i18n';
+import { ItemName } from '../components/ItemName';
 
 /**
  * A customer's passbook: every transaction with them, in one place.
@@ -31,11 +33,11 @@ const PAGE_SIZE = 100;
 type Preset = '30d' | '90d' | 'year' | 'all' | 'custom';
 
 const PRESETS: Array<{ id: Preset; label: string }> = [
-  { id: '30d', label: 'Last 30 days' },
-  { id: '90d', label: 'Last 3 months' },
-  { id: 'year', label: 'This year' },
-  { id: 'all', label: 'All time' },
-  { id: 'custom', label: 'Custom' },
+  { id: '30d', get label() { return t('Last 30 days'); } },
+  { id: '90d', get label() { return t('Last 3 months'); } },
+  { id: 'year', get label() { return t('This year'); } },
+  { id: 'all', get label() { return t('All time'); } },
+  { id: 'custom', get label() { return t('Custom'); } },
 ];
 
 /** Move a YYYY-MM-DD key by whole days, without any timezone drift. */
@@ -65,16 +67,16 @@ const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 1
 /** How a bill was settled, in words. */
 const billSettlement = (entry: PassbookEntry) => {
   switch (entry.payment_method) {
-    case 'cash': return 'Paid in cash';
-    case 'upi': return 'Paid by UPI';
-    case 'credit': return 'On credit';
+    case 'cash': return t('Paid in cash');
+    case 'upi': return t('Paid by UPI');
+    case 'credit': return t('On credit');
     case 'split': {
       const parts = [
-        entry.cash_amount ? `Cash ${money(entry.cash_amount)}` : null,
-        entry.upi_amount ? `UPI ${money(entry.upi_amount)}` : null,
-        entry.credit_amount ? `Credit ${money(entry.credit_amount)}` : null,
+        entry.cash_amount ? t('Cash {amount}', { amount: money(entry.cash_amount) }) : null,
+        entry.upi_amount ? t('UPI {amount}', { amount: money(entry.upi_amount) }) : null,
+        entry.credit_amount ? t('Credit {amount}', { amount: money(entry.credit_amount) }) : null,
       ].filter(Boolean);
-      return `Split — ${parts.join(' · ')}`;
+      return t('Split — {parts}', { parts: parts.join(' · ') });
     }
     default: return '';
   }
@@ -144,7 +146,7 @@ export const CustomerPassbook = () => {
       setNotFound(false);
     } catch (err: any) {
       if (/not found/i.test(err?.message || '')) setNotFound(true);
-      else setError(err?.message || 'Could not load the passbook.');
+      else setError(err?.message || t('Could not load the passbook.'));
     } finally {
       setLoading(false);
     }
@@ -178,7 +180,7 @@ export const CustomerPassbook = () => {
     } catch (err: any) {
       setExpanded((current) => ({
         ...current,
-        [billId]: { status: 'error', message: err?.message || 'Could not load this bill.' },
+        [billId]: { status: 'error', message: err?.message || t('Could not load this bill.') },
       }));
     }
   };
@@ -187,7 +189,7 @@ export const CustomerPassbook = () => {
     e.preventDefault();
     const amount = Number(paymentAmount);
     if (!Number.isFinite(amount) || amount <= 0) {
-      setPaymentMessage({ kind: 'error', text: 'Enter the amount received.' });
+      setPaymentMessage({ kind: 'error', text: t('Enter the amount received.') });
       return;
     }
     setRecordingPayment(true);
@@ -197,13 +199,13 @@ export const CustomerPassbook = () => {
       setPaymentNote('');
       setPaymentMessage({
         kind: 'ok',
-        text: `Recorded ${money(result.amount)}. Balance due is now ${money(result.balance_after)}.`,
+        text: t('Recorded {amount}. Balance due is now {balance_after}.', { amount: money(result.amount), balance_after: money(result.balance_after) }),
       });
       // Jump to where the new line is visible: the newest page.
       setPage(0);
       await load();
     } catch (err: any) {
-      setPaymentMessage({ kind: 'error', text: err?.message || 'Could not record the payment.' });
+      setPaymentMessage({ kind: 'error', text: err?.message || t('Could not record the payment.') });
     } finally {
       setRecordingPayment(false);
     }
@@ -213,8 +215,8 @@ export const CustomerPassbook = () => {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-24 text-gray-400">
         <User size={40} />
-        <p className="font-medium">This customer does not exist.</p>
-        <Link to="/customers" className="font-bold text-orange-600 hover:underline">Back to customers</Link>
+        <p className="font-medium">{t('This customer does not exist.')}</p>
+        <Link to="/customers" className="font-bold text-orange-600 hover:underline">{t('Back to customers')}</Link>
       </div>
     );
   }
@@ -232,7 +234,7 @@ export const CustomerPassbook = () => {
     <tr className="bg-gray-50">
       <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">{from}</td>
       <td className="px-4 py-3 text-sm font-semibold text-gray-700" colSpan={3}>
-        Balance brought forward
+        {t('Balance brought forward')}
       </td>
       <td className="px-4 py-3 text-right text-sm font-bold text-gray-900 whitespace-nowrap">
         {money(summary!.opening_balance)}
@@ -244,7 +246,7 @@ export const CustomerPassbook = () => {
     <div className="space-y-6">
       <Link to="/customers" className="inline-flex items-center gap-2 text-sm font-semibold text-gray-500 hover:text-gray-900">
         <ArrowLeft size={16} />
-        All customers
+        {t('All customers')}
       </Link>
 
       {/* Who, and what they owe now. */}
@@ -252,7 +254,7 @@ export const CustomerPassbook = () => {
         <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100">
           <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-gray-400">
             <BookOpen size={14} />
-            Passbook
+            {t('Passbook')}
           </p>
           <h1 className="mt-2 text-3xl font-bold text-gray-900">
             {customer ? customerDisplayName(customer) : ' '}
@@ -269,7 +271,7 @@ export const CustomerPassbook = () => {
             )}
             {customer?.gstin && (
               <span className="flex items-center gap-2">
-                <span className="font-bold text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">GST</span>
+                <span className="font-bold text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">{t('GST')}</span>
                 {customer.gstin}
               </span>
             )}
@@ -282,7 +284,7 @@ export const CustomerPassbook = () => {
         <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100">
           <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-gray-400">
             <Wallet size={14} />
-            Balance due today
+            {t('Balance due today')}
           </p>
           <p className={cn('mt-2 text-3xl font-black', balanceDue > 0 ? 'text-red-500' : 'text-green-500')}>
             {money(balanceDue)}
@@ -298,7 +300,7 @@ export const CustomerPassbook = () => {
                   max={balanceDue}
                   value={paymentAmount}
                   onChange={(e) => { setPaymentAmount(e.target.value); setPaymentMessage(null); }}
-                  placeholder={`Amount received (max ${balanceDue.toFixed(2)})`}
+                  placeholder={t('Amount received (max {value})', { value: balanceDue.toFixed(2) })}
                   className="min-w-0 flex-1 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:ring-2 focus:ring-orange-500"
                 />
                 <button
@@ -306,19 +308,19 @@ export const CustomerPassbook = () => {
                   disabled={recordingPayment}
                   className="shrink-0 rounded-2xl bg-orange-600 px-5 py-3 font-bold text-white shadow-lg shadow-orange-100 transition-all hover:bg-orange-700 disabled:opacity-50 disabled:pointer-events-none"
                 >
-                  {recordingPayment ? 'Saving…' : 'Record Payment'}
+                  {recordingPayment ? t('Saving…') : t('Record Payment')}
                 </button>
               </div>
               <input
                 type="text"
                 value={paymentNote}
                 onChange={(e) => setPaymentNote(e.target.value)}
-                placeholder="Note (optional), e.g. cash received at counter"
+                placeholder={t('Note (optional), e.g. cash received at counter')}
                 className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-orange-500"
               />
             </form>
           ) : (
-            <p className="mt-2 text-sm text-gray-500">Nothing outstanding.</p>
+            <p className="mt-2 text-sm text-gray-500">{t('Nothing outstanding.')}</p>
           )}
           {paymentMessage && (
             <p className={cn('mt-3 text-sm font-medium', paymentMessage.kind === 'ok' ? 'text-green-600' : 'text-red-600')}>
@@ -351,7 +353,7 @@ export const CustomerPassbook = () => {
           {preset === 'custom' && (
             <>
               <label className="space-y-1">
-                <span className="block text-xs font-semibold text-gray-500">From</span>
+                <span className="block text-xs font-semibold text-gray-500">{t('From')}</span>
                 <input
                   type="date"
                   value={from}
@@ -361,7 +363,7 @@ export const CustomerPassbook = () => {
                 />
               </label>
               <label className="space-y-1">
-                <span className="block text-xs font-semibold text-gray-500">To</span>
+                <span className="block text-xs font-semibold text-gray-500">{t('To')}</span>
                 <input
                   type="date"
                   value={to}
@@ -375,10 +377,10 @@ export const CustomerPassbook = () => {
           <button
             onClick={() => { setOrder((current) => (current === 'desc' ? 'asc' : 'desc')); setPage(0); }}
             className="flex items-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50"
-            title="Change the order of the entries"
+            title={t('Change the order of the entries')}
           >
             <ArrowDownUp size={16} />
-            {order === 'desc' ? 'Newest first' : 'Oldest first'}
+            {order === 'desc' ? t('Newest first') : t('Oldest first')}
           </button>
         </div>
       </div>
@@ -387,10 +389,10 @@ export const CustomerPassbook = () => {
       {summary && (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {[
-            { label: from ? 'Opening balance' : 'Opening balance (start)', value: summary.opening_balance, tone: 'text-gray-900' },
-            { label: `Billed · ${summary.bill_count} bill${summary.bill_count === 1 ? '' : 's'}`, value: summary.total_billed, tone: 'text-gray-900' },
-            { label: 'Received', value: summary.total_received, tone: 'text-green-600' },
-            { label: to ? 'Closing balance' : 'Closing balance (today)', value: summary.closing_balance, tone: summary.closing_balance > 0 ? 'text-red-500' : 'text-green-600' },
+            { label: from ? t('Opening balance') : t('Opening balance (start)'), value: summary.opening_balance, tone: 'text-gray-900' },
+            { label: tn(summary.bill_count, 'Billed · 1 bill', 'Billed · {count} bills'), value: summary.total_billed, tone: 'text-gray-900' },
+            { label: t('Received'), value: summary.total_received, tone: 'text-green-600' },
+            { label: to ? t('Closing balance') : t('Closing balance (today)'), value: summary.closing_balance, tone: summary.closing_balance > 0 ? 'text-red-500' : 'text-green-600' },
           ].map((card) => (
             <div key={card.label} className="bg-white p-5 rounded-3xl shadow-sm border border-gray-100">
               <p className="text-xs font-bold uppercase tracking-wider text-gray-400">{card.label}</p>
@@ -404,7 +406,7 @@ export const CustomerPassbook = () => {
         <div className="flex items-center justify-between gap-4 rounded-2xl border border-red-100 bg-red-50 px-6 py-4">
           <p className="font-medium text-red-600">{error}</p>
           <button onClick={() => void load()} className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100">
-            Retry
+            {t('Retry')}
           </button>
         </div>
       )}
@@ -415,22 +417,22 @@ export const CustomerPassbook = () => {
         <table className="w-full text-left">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
-              <th className="px-4 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Date</th>
-              <th className="px-4 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Particulars</th>
-              <th className="px-4 py-4 text-right text-xs font-bold text-gray-400 uppercase tracking-wider">Billed</th>
-              <th className="px-4 py-4 text-right text-xs font-bold text-gray-400 uppercase tracking-wider">Received</th>
-              <th className="px-4 py-4 text-right text-xs font-bold text-gray-400 uppercase tracking-wider">Balance due</th>
+              <th className="px-4 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">{t('Date')}</th>
+              <th className="px-4 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">{t('Particulars')}</th>
+              <th className="px-4 py-4 text-right text-xs font-bold text-gray-400 uppercase tracking-wider">{t('Billed')}</th>
+              <th className="px-4 py-4 text-right text-xs font-bold text-gray-400 uppercase tracking-wider">{t('Received')}</th>
+              <th className="px-4 py-4 text-right text-xs font-bold text-gray-400 uppercase tracking-wider">{t('Balance due')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
             {order === 'asc' && broughtForwardRow}
 
             {loading ? (
-              <tr><td colSpan={5} className="px-4 py-12 text-center text-gray-400">Loading passbook…</td></tr>
+              <tr><td colSpan={5} className="px-4 py-12 text-center text-gray-400">{t('Loading passbook…')}</td></tr>
             ) : entries.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-4 py-12 text-center text-gray-400">
-                  No transactions {from || to ? 'in this period' : 'yet'}.
+                  {from || to ? t('No transactions in this period.') : t('No transactions yet.')}
                 </td>
               </tr>
             ) : (
@@ -450,7 +452,7 @@ export const CustomerPassbook = () => {
                         <div className="flex items-center gap-2">
                           {isBill && (detail ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />)}
                           <span className={cn('text-[10px] font-black uppercase px-2 py-1 rounded-full', KIND_BADGE[entry.kind])}>
-                            {KIND_LABEL[entry.kind]}
+                            {t(KIND_LABEL[entry.kind])}
                           </span>
                           {entry.bill_number && (
                             <span className="font-mono text-sm font-bold text-gray-900">{entry.bill_number}</span>
@@ -484,41 +486,41 @@ export const CustomerPassbook = () => {
                       <tr className="bg-gray-50">
                         <td />
                         <td colSpan={4} className="px-4 pb-5 pt-1">
-                          {detail.status === 'loading' && <p className="text-sm text-gray-400">Loading bill…</p>}
+                          {detail.status === 'loading' && <p className="text-sm text-gray-400">{t('Loading bill…')}</p>}
                           {detail.status === 'error' && <p className="text-sm text-red-600">{detail.message}</p>}
                           {detail.status === 'ready' && (
                             <div className="rounded-2xl border border-gray-100 bg-white p-4">
                               <table className="w-full text-sm">
                                 <thead>
                                   <tr className="text-xs uppercase tracking-wider text-gray-400">
-                                    <th className="pb-2 text-left font-bold">Item</th>
-                                    <th className="pb-2 text-left font-bold">HSN</th>
-                                    <th className="pb-2 text-right font-bold">Qty</th>
-                                    <th className="pb-2 text-right font-bold">Amount</th>
+                                    <th className="pb-2 text-left font-bold">{t('Item')}</th>
+                                    <th className="pb-2 text-left font-bold">{t('HSN')}</th>
+                                    <th className="pb-2 text-right font-bold">{t('Qty')}</th>
+                                    <th className="pb-2 text-right font-bold">{t('Amount')}</th>
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-50">
                                   {(detail.bill.items || []).map((line) => (
                                     <tr key={line.id}>
-                                      <td className="py-2 font-semibold text-gray-900">{line.item_name}</td>
+                                      <td className="py-2 font-semibold text-gray-900"><ItemName name={line.item_name} /></td>
                                       <td className="py-2 text-gray-500">{line.hsn_code || '-'}</td>
-                                      <td className="py-2 text-right text-gray-700">{line.quantity} {line.metric}</td>
+                                      <td className="py-2 text-right text-gray-700">{line.quantity} {unitLabel(line.metric)}</td>
                                       <td className="py-2 text-right font-semibold text-gray-900">{money(line.total_amount)}</td>
                                     </tr>
                                   ))}
                                 </tbody>
                               </table>
                               <div className="mt-3 flex flex-wrap justify-end gap-x-6 gap-y-1 border-t border-gray-100 pt-3 text-xs text-gray-500">
-                                <span>Subtotal {money(detail.bill.subtotal_amount)}</span>
-                                <span>GST {money(detail.bill.tax_amount)}</span>
-                                {detail.bill.discount_amount > 0 && <span>Discount −{money(detail.bill.discount_amount)}</span>}
+                                <span>{t('Subtotal {subtotal_amount}', { subtotal_amount: money(detail.bill.subtotal_amount) })}</span>
+                                <span>{t('GST {tax_amount}', { tax_amount: money(detail.bill.tax_amount) })}</span>
+                                {detail.bill.discount_amount > 0 && <span>{t('Discount −{discount_amount}', { discount_amount: money(detail.bill.discount_amount) })}</span>}
                                 <span>
-                                  Round off {money(round2(
+                                  {t('Round off {money}', { money: money(round2(
                                     detail.bill.total_amount -
                                     (detail.bill.subtotal_amount + detail.bill.tax_amount - detail.bill.discount_amount)
-                                  ))}
+                                  )) })}
                                 </span>
-                                <span className="font-bold text-gray-900">Total {money(detail.bill.total_amount)}</span>
+                                <span className="font-bold text-gray-900">{t('Total {total_amount}', { total_amount: money(detail.bill.total_amount) })}</span>
                               </div>
                             </div>
                           )}
@@ -538,9 +540,9 @@ export const CustomerPassbook = () => {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-6 py-4">
           <p className="text-sm text-gray-500">
             {total === 0
-              ? 'No entries'
-              : `Showing ${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)} of ${total.toLocaleString('en-IN')} entries`}
-            <span className="ml-2 text-gray-400">· Click a bill to see its items</span>
+              ? t('No entries')
+              : t('Showing {value}–{value2} of {value3} entries', { value: page * PAGE_SIZE + 1, value2: Math.min((page + 1) * PAGE_SIZE, total), value3: total.toLocaleString('en-IN') })}
+            <span className="ml-2 text-gray-400">{t('· Click a bill to see its items')}</span>
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -548,17 +550,17 @@ export const CustomerPassbook = () => {
               disabled={page === 0 || loading}
               className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
             >
-              Previous
+              {t('Previous')}
             </button>
             <span className="px-2 text-sm font-semibold text-gray-500">
-              Page {page + 1} of {pageCount.toLocaleString('en-IN')}
+              {t('Page {value} of {value2}', { value: page + 1, value2: pageCount.toLocaleString('en-IN') })}
             </span>
             <button
               onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
               disabled={page >= pageCount - 1 || loading}
               className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
             >
-              Next
+              {t('Next')}
             </button>
           </div>
         </div>

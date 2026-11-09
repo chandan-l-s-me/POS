@@ -3,6 +3,20 @@ import { Search } from 'lucide-react';
 import { api } from '../api';
 import type { AuditLog } from '../types';
 import { formatDateTimeInIST } from '../lib/utils';
+import { t } from '../i18n';
+
+/**
+ * What happened and to what, in words. The details column is the record as
+ * the server wrote it, and stays as written.
+ */
+const LOG_LABELS: Record<string, string> = {
+  create: 'Created', update: 'Updated', delete: 'Deleted', login: 'Signed in', backup: 'Backup',
+  credit_payment: 'Credit payment', supplier_payment: 'Supplier payment', stock_adjustment: 'Stock adjustment',
+  bill: 'Bill', purchase: 'Purchase', auth: 'Sign-in', customer: 'Customer', item: 'Item', supplier: 'Supplier',
+  stock_batch: 'Stock batch', settings: 'Settings', system: 'System', admin_account: 'Admin account',
+  admin: 'Admin', cashier: 'Cashier',
+};
+const logLabel = (value: string | null | undefined) => (value && LOG_LABELS[value] ? t(LOG_LABELS[value]) : value ?? '');
 
 const PAGE_SIZE = 200;
 
@@ -35,7 +49,7 @@ export const ActivityLog = () => {
         setTotal(res?.total ?? 0);
         setLoadError('');
       })
-      .catch((err: any) => setLoadError(err?.message || 'Could not load the activity log.'))
+      .catch((err: any) => setLoadError(err?.message || t('Could not load the activity log.')))
       .finally(() => setLoading(false));
   }, [page, appliedSearch]);
 
@@ -47,9 +61,9 @@ export const ActivityLog = () => {
     <section className="rounded-2xl border border-gray-200 bg-white">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 sm:px-6">
         <div className="min-w-0">
-          <h2 className="text-base font-bold text-gray-900">Activity log</h2>
+          <h2 className="text-base font-bold text-gray-900">{t('Activity log')}</h2>
           <p className="mt-0.5 text-sm text-gray-500">
-            Who signed in and who changed items, customers, settings, staff and bills. {total.toLocaleString('en-IN')} entries.
+            {t('Who signed in and who changed items, customers, settings, staff and bills. {value} entries.', { value: total.toLocaleString('en-IN') })}
           </p>
         </div>
         <div className="relative w-full sm:w-72">
@@ -58,7 +72,7 @@ export const ActivityLog = () => {
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by person, action or details"
+            placeholder={t('Search by person, action or details')}
             className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-10 pr-3.5 text-sm outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
           />
         </div>
@@ -68,20 +82,20 @@ export const ActivityLog = () => {
         <table className="w-full text-left text-sm">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-400">
-              <th className="px-5 py-3 sm:px-6">Time</th>
-              <th className="px-4 py-3">Who</th>
-              <th className="px-4 py-3">Action</th>
-              <th className="px-4 py-3">On</th>
-              <th className="px-4 py-3 sm:pr-6">Details</th>
+              <th className="px-5 py-3 sm:px-6">{t('Time')}</th>
+              <th className="px-4 py-3">{t('Who')}</th>
+              <th className="px-4 py-3">{t('Action')}</th>
+              <th className="px-4 py-3">{t('On')}</th>
+              <th className="px-4 py-3 sm:pr-6">{t('Details')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-400">Loading…</td></tr>
+              <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-400">{t('Loading…')}</td></tr>
             ) : loadError ? (
               <tr><td colSpan={5} className="px-6 py-12 text-center text-red-600">{loadError}</td></tr>
             ) : logs.length === 0 ? (
-              <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-400">No entries found</td></tr>
+              <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-400">{t('No entries found')}</td></tr>
             ) : (
               logs.map((log) => (
                 <tr key={log.id} className="align-top hover:bg-gray-50">
@@ -90,13 +104,13 @@ export const ActivityLog = () => {
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-semibold text-gray-900">{log.user_name}</p>
-                    <p className="text-xs capitalize text-gray-500">{log.user_role}</p>
+                    <p className="text-xs capitalize text-gray-500">{logLabel(log.user_role)}</p>
                   </td>
                   <td className="px-4 py-3">
-                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-bold capitalize text-gray-700">{log.action}</span>
+                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-bold capitalize text-gray-700">{logLabel(log.action)}</span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-gray-600">
-                    {log.entity_type}
+                    {logLabel(log.entity_type)}
                     {log.entity_id ? ` #${log.entity_id}` : ''}
                   </td>
                   <td className="min-w-[16rem] px-4 py-3 text-gray-700 sm:pr-6">{log.details}</td>
@@ -110,18 +124,18 @@ export const ActivityLog = () => {
       <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-5 py-3 sm:px-6">
         <p className="text-sm text-gray-500">
           {total === 0
-            ? 'Nothing matches this search'
-            : `Showing ${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)} of ${total.toLocaleString('en-IN')}`}
+            ? t('Nothing matches this search')
+            : t('Showing {value}–{value2} of {value3}', { value: page * PAGE_SIZE + 1, value2: Math.min((page + 1) * PAGE_SIZE, total), value3: total.toLocaleString('en-IN') })}
         </p>
         <div className="flex items-center gap-2">
           <button onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page === 0 || loading} className={pageButton}>
-            Previous
+            {t('Previous')}
           </button>
           <span className="px-1 text-sm font-semibold text-gray-500">
             {page + 1} / {pageCount.toLocaleString('en-IN')}
           </span>
           <button onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))} disabled={page >= pageCount - 1 || loading} className={pageButton}>
-            Next
+            {t('Next')}
           </button>
         </div>
       </footer>

@@ -24,6 +24,9 @@ import { isLooseUnit } from '../lib/units';
 import { useBackButton } from '../lib/backButton';
 import { round2 } from '../lib/billMath';
 import { cn, formatDateInIST } from '../lib/utils';
+import { LanguageSwitch } from '../components/LanguageSwitch';
+import { itemKannada, itemLabel, paymentLabel, t, tn, unitLabel } from '../i18n';
+import { ItemName } from '../components/ItemName';
 
 /**
  * Quick Bill: billing on a phone, for cashiers walking the shop floor.
@@ -87,7 +90,7 @@ export const QuickBill = () => {
   const printMode = printer.mode === 'bluetooth' && !canBluetooth ? 'counter' : printer.mode;
 
   useEffect(() => {
-    api.getCustomers({ limit: 1000 }).then(setCustomers).catch(() => notice.show('Could not load customers.', 'error'));
+    api.getCustomers({ limit: 1000 }).then(setCustomers).catch(() => notice.show(t('Could not load customers.'), 'error'));
   }, []);
 
   // Suggestions follow the customer: their usual items and last order.
@@ -129,41 +132,41 @@ export const QuickBill = () => {
       if (quantity > 0) await addItemToCart(item, quantity);
     }
     vibrate();
-    notice.show(short ? `Last order added; ${short} item${short === 1 ? ' is' : 's are'} short of stock.` : 'Last order added — check the quantities.', short ? 'warning' : 'info');
+    notice.show(short ? (short === 1 ? t('Last order added; 1 item is short of stock.') : t('Last order added; {short} items are short of stock.', { short })) : t('Last order added — check the quantities.'), short ? 'warning' : 'info');
   };
 
   // --- Printing ---------------------------------------------------------------
 
   const watchCounterPrint = useCallback((jobId: number) => {
-    setPrintState({ kind: 'working', text: 'Sent to the counter printer…' });
+    setPrintState({ kind: 'working', text: t('Sent to the counter printer…') });
     let tries = 0;
     const poll = async () => {
       tries += 1;
       try {
         const job = await api.getPrintJob(jobId);
         if (job?.status === 'printed') {
-          setPrintState({ kind: 'done', text: 'Printed at the counter' });
+          setPrintState({ kind: 'done', text: t('Printed at the counter') });
           return;
         }
       } catch { /* keep trying */ }
       if (tries < 20) setTimeout(poll, 3000);
-      else setPrintState({ kind: 'error', text: 'Not printed yet — is the counter computer on, with “Print bills from phones” turned on?' });
+      else setPrintState({ kind: 'error', text: t('Not printed yet — is the counter computer on, with “Print bills from phones” turned on?') });
     };
     setTimeout(poll, 2000);
   }, []);
 
   const printBluetooth = useCallback(async (billId: number) => {
     if (!printer.address) {
-      setPrintState({ kind: 'error', text: 'Choose your Bluetooth printer in ⚙ first.' });
+      setPrintState({ kind: 'error', text: t('Choose your Bluetooth printer in ⚙ first.') });
       return;
     }
-    setPrintState({ kind: 'working', text: `Printing on ${printer.name || 'Bluetooth printer'}…` });
+    setPrintState({ kind: 'working', text: t('Printing on {printer}…', { printer: printer.name || t('Bluetooth printer') }) });
     try {
       const bill = await api.getBill(billId);
       await printToBluetooth(printer.address, receiptBytes(bill, settings, printer.paper));
-      setPrintState({ kind: 'done', text: `Printed on ${printer.name || 'Bluetooth printer'}` });
+      setPrintState({ kind: 'done', text: t('Printed on {printer}', { printer: printer.name || t('Bluetooth printer') }) });
     } catch (err: any) {
-      setPrintState({ kind: 'error', text: `Could not print: ${err?.message || 'printer not reachable'}. Is it on and nearby?` });
+      setPrintState({ kind: 'error', text: t('Could not print: {reason}. Is it on and nearby?', { reason: err?.message || t('printer not reachable') }) });
     }
   }, [printer, settings]);
 
@@ -174,7 +177,7 @@ export const QuickBill = () => {
       const job = await api.requestCounterPrint(done.billId);
       watchCounterPrint(job.id);
     } catch (err: any) {
-      setPrintState({ kind: 'error', text: err?.message || 'Could not send to the counter.' });
+      setPrintState({ kind: 'error', text: err?.message || t('Could not send to the counter.') });
     }
   };
 
@@ -238,9 +241,9 @@ export const QuickBill = () => {
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      notice.show('Bill PDF downloaded — attach it in WhatsApp.', 'info');
+      notice.show(t('Bill PDF downloaded — attach it in WhatsApp.'), 'info');
     } catch (err: any) {
-      notice.show(err?.message || 'Could not make the bill PDF.', 'error');
+      notice.show(err?.message || t('Could not make the bill PDF.'), 'error');
     } finally {
       setSharing(false);
     }
@@ -260,7 +263,7 @@ export const QuickBill = () => {
       if (Capacitor.isNativePlatform()) window.location.href = link;
       else window.open(link, '_blank', 'noopener');
     } catch (err: any) {
-      notice.show(err?.message || 'Could not prepare the bill for WhatsApp.', 'error');
+      notice.show(err?.message || t('Could not prepare the bill for WhatsApp.'), 'error');
     } finally {
       setSharing(false);
     }
@@ -271,27 +274,27 @@ export const QuickBill = () => {
   const save = async () => {
     if (!lines.length || saving) return;
     if (cart.paymentMethod === 'credit' && !customer) {
-      notice.show('Credit is only for a registered customer. Choose the bakery first.', 'warning');
+      notice.show(t('Credit is only for a registered customer. Choose the bakery first.'), 'warning');
       return;
     }
     if (isPart) {
       if (paidNow <= 0) {
-        notice.show('Enter how much is paid now in cash or UPI.', 'warning');
+        notice.show(t('Enter how much is paid now in cash or UPI.'), 'warning');
         return;
       }
       if (onCredit < 0) {
-        notice.show(`Paid now (${rupees(paidNow)}) is more than the bill (${rupees(total)}).`, 'warning');
+        notice.show(t('Paid now ({paidNow}) is more than the bill ({total}).', { paidNow: rupees(paidNow), total: rupees(total) }), 'warning');
         return;
       }
       if (onCredit > 0 && !customer) {
-        notice.show('The balance goes on credit, which needs a registered customer. Choose the bakery first.', 'warning');
+        notice.show(t('The balance goes on credit, which needs a registered customer. Choose the bakery first.'), 'warning');
         return;
       }
     }
     const paidSummary = (() => {
       const { cash, upi, credit } = cart.paymentAmounts;
-      if (!isPart) return cart.paymentMethod === 'credit' ? 'On credit' : `Paid by ${cart.paymentMethod === 'upi' ? 'UPI' : 'cash'}`;
-      return [cash > 0 && `Cash ${rupees(cash)}`, upi > 0 && `UPI ${rupees(upi)}`, credit > 0 && `${rupees(credit)} on credit`]
+      if (!isPart) return cart.paymentMethod === 'credit' ? t('On credit') : cart.paymentMethod === 'upi' ? t('Paid by UPI') : t('Paid by cash');
+      return [cash > 0 && t('Cash {amount}', { amount: rupees(cash) }), upi > 0 && t('UPI {amount}', { amount: rupees(upi) }), credit > 0 && t('{amount} on credit', { amount: rupees(credit) })]
         .filter(Boolean).join(' · ');
     })();
     setSaving(true);
@@ -310,7 +313,7 @@ export const QuickBill = () => {
         billId: result.bill_id,
         billNumber: result.bill_number,
         total: result.total_amount,
-        customer: customer ? customerDisplayName(customer) : 'Walk-in customer',
+        customer: customer ? customerDisplayName(customer) : t('Walk-in customer'),
         paid: paidSummary,
         customerId: customer?.id ?? null,
         phone: customer?.phone ?? null,
@@ -330,7 +333,7 @@ export const QuickBill = () => {
         await refreshCartBatches().catch(() => undefined);
         notice.show(error.message, 'warning');
       } else {
-        notice.show(error.message || 'Could not save the bill.', 'error');
+        notice.show(error.message || t('Could not save the bill.'), 'error');
       }
     } finally {
       setSaving(false);
@@ -342,8 +345,8 @@ export const QuickBill = () => {
   useBackButton(done !== null, newBill);
 
   const saveLabel = saving
-    ? 'Saving…'
-    : printMode === 'counter' ? 'Save & print at counter' : printMode === 'bluetooth' ? 'Save & print' : 'Save bill';
+    ? t('Saving…')
+    : printMode === 'counter' ? t('Save & print at counter') : printMode === 'bluetooth' ? t('Save & print') : t('Save bill');
 
   // --- Suggestions ------------------------------------------------------------
 
@@ -355,16 +358,16 @@ export const QuickBill = () => {
       {/* Header */}
       <header className="flex items-center justify-between gap-2 bg-white px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] border-b border-gray-100">
         <div className="min-w-0">
-          <p className="text-lg font-black leading-tight">Quick Bill</p>
+          <p className="text-lg font-black leading-tight">{t('Quick Bill')}</p>
           <p className="text-xs text-gray-500 truncate">{user?.name}</p>
         </div>
         <div className="flex items-center gap-1">
           {lines.length > 0 && (
             <button onClick={() => { clearCart(); vibrate(); }} className="flex h-11 items-center gap-1 rounded-xl px-3 text-sm font-bold text-gray-500 active:bg-gray-100">
-              <Trash2 size={18} /> Clear
+              <Trash2 size={18} /> {t('Clear')}
             </button>
           )}
-          <button onClick={() => setSheet('settings')} aria-label="Settings" className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-600 active:bg-gray-100">
+          <button onClick={() => setSheet('settings')} aria-label={t('Settings')} className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-600 active:bg-gray-100">
             <Settings2 size={22} />
           </button>
         </div>
@@ -374,11 +377,11 @@ export const QuickBill = () => {
       <div className="bg-white px-4 py-3 border-b border-gray-100">
         <button onClick={() => setSheet('customer')} className="flex w-full items-center justify-between gap-3 rounded-2xl border border-gray-200 px-4 py-3 text-left active:bg-gray-50">
           <span className="min-w-0">
-            <span className="block truncate font-bold">{customer ? customerDisplayName(customer) : 'Walk-in customer'}</span>
+            <span className="block truncate font-bold">{customer ? customerDisplayName(customer) : t('Walk-in customer')}</span>
             <span className="block truncate text-xs text-gray-500">
               {customer
                 ? [customerContactName(customer), customer.credit_balance > 0 ? `owes ${rupees(customer.credit_balance)}` : null].filter(Boolean).join(' · ') || customer.phone
-                : 'Tap to choose a bakery'}
+                : t('Tap to choose a bakery')}
             </span>
           </span>
           <ChevronDown size={20} className="shrink-0 text-gray-400" />
@@ -386,7 +389,7 @@ export const QuickBill = () => {
         {customer && lastOrder?.bill && lastOrder.items.length > 0 && (
           <button onClick={repeatLastOrder} className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-orange-50 px-4 py-3 text-sm font-bold text-orange-700 active:bg-orange-100">
             <RotateCcw size={16} />
-            Repeat last order · {formatDateInIST(lastOrder.bill.created_at, { year: undefined })} · {lastOrder.items.length} item{lastOrder.items.length === 1 ? '' : 's'}
+            {tn(lastOrder.items.length, 'Repeat last order · {date} · 1 item', 'Repeat last order · {date} · {count} items', { date: formatDateInIST(lastOrder.bill.created_at, { year: undefined }) })}
           </button>
         )}
       </div>
@@ -395,13 +398,13 @@ export const QuickBill = () => {
       <main className="flex-1 overflow-y-auto overscroll-contain">
         <div className="px-4 pt-3">
           <button onClick={() => setSheet('search')} className="flex w-full items-center gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-3.5 text-left text-gray-400 active:bg-gray-50">
-            <Search size={20} /> Search items…
+            <Search size={20} /> {t('Search items…')}
           </button>
         </div>
 
         {suggestions.length > 0 && (
           <div className="px-4 pt-3">
-            <p className="mb-2 text-xs font-bold uppercase text-gray-400">{usual.length && customer ? `Usual for ${customerDisplayName(customer)}` : 'Best sellers'}</p>
+            <p className="mb-2 text-xs font-bold uppercase text-gray-400">{usual.length && customer ? t('Usual for {customer}', { customer: customerDisplayName(customer) }) : t('Best sellers')}</p>
             {/* One row, swiped sideways, so the bill below stays in view. */}
             <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none]">
               {suggestions.map((item) => {
@@ -412,11 +415,13 @@ export const QuickBill = () => {
                     disabled={out}
                     onClick={() => add(item)}
                     className={cn(
-                      'max-w-[14rem] shrink-0 rounded-full border px-3 py-2 text-sm font-semibold active:scale-95 transition',
+                      'max-w-[14rem] shrink-0 border px-3 py-2 text-sm font-semibold active:scale-95 transition',
+                      // Two lines (Kannada and English) need softer corners than a pill.
+                      itemKannada(item.name) ? 'rounded-2xl leading-tight' : 'rounded-full',
                       out ? 'border-gray-100 text-gray-300 line-through' : inBill.has(item.id) ? 'border-orange-300 bg-orange-50 text-orange-800' : 'border-gray-200 bg-white text-gray-800'
                     )}
                   >
-                    <span className="block truncate">{item.name}</span>
+                    <ItemName name={item.name} truncate />
                   </button>
                 );
               })}
@@ -427,7 +432,7 @@ export const QuickBill = () => {
         <ul className="mt-3 space-y-2 px-4 pb-4">
           {lines.length === 0 && (
             <li className="rounded-2xl border border-dashed border-gray-200 py-10 text-center text-sm text-gray-400">
-              No items yet. Tap an item above or search.
+              {t('No items yet. Tap an item above or search.')}
             </li>
           )}
           {lines.map((line) => {
@@ -436,22 +441,22 @@ export const QuickBill = () => {
             return (
               <li key={line.id} className={cn('rounded-2xl border bg-white p-3', short ? 'border-red-200' : 'border-gray-100')}>
                 <div className="flex items-start justify-between gap-2">
-                  <p className="min-w-0 font-bold leading-snug">{line.name}</p>
+                  <p className="min-w-0 font-bold leading-snug"><ItemName name={line.name} /></p>
                   <p className="shrink-0 font-black tabular-nums">{rupees(line.total_amount)}</p>
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <p className="text-xs text-gray-500">
-                    {line.segments.map((segment) => `${qty(segment.quantity)} × ${rupees(segment.unit_price)}`).join(' + ')} / {line.metric}
-                    {short && <span className="block font-bold text-red-600">Only {qty(line.available)} in stock</span>}
+                    {line.segments.map((segment) => `${qty(segment.quantity)} × ${rupees(segment.unit_price)}`).join(' + ')} / {unitLabel(line.metric)}
+                    {short && <span className="block font-bold text-red-600">{t('Only {available} in stock', { available: qty(line.available) })}</span>}
                   </p>
                   <div className="flex shrink-0 items-center gap-0.5">
-                    <button onClick={() => changeBy(line.id, line.quantity, -step)} aria-label="Less" className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 active:bg-gray-200">
+                    <button onClick={() => changeBy(line.id, line.quantity, -step)} aria-label={t('Less')} className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 active:bg-gray-200">
                       <Minus size={14} />
                     </button>
                     <button onClick={() => setSheet({ keypad: line.id })} className="h-8 min-w-[2.25rem] rounded-lg border border-gray-200 px-1.5 text-sm font-black tabular-nums active:bg-gray-50">
                       {qty(line.quantity)}
                     </button>
-                    <button onClick={() => changeBy(line.id, line.quantity, step)} aria-label="More" className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-900 text-white active:bg-gray-700">
+                    <button onClick={() => changeBy(line.id, line.quantity, step)} aria-label={t('More')} className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-900 text-white active:bg-gray-700">
                       <Plus size={14} />
                     </button>
                   </div>
@@ -466,8 +471,8 @@ export const QuickBill = () => {
       <footer className="border-t border-gray-100 bg-white px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(0,0,0,0.05)]">
         <div className="flex items-end justify-between">
           <p className="text-sm text-gray-500">
-            {lines.length} item{lines.length === 1 ? '' : 's'}
-            {cart.totals.tax > 0 && <span className="block text-xs">incl. GST {rupees(cart.totals.tax)}</span>}
+            {tn(lines.length, '1 item', '{count} items')}
+            {cart.totals.tax > 0 && <span className="block text-xs">{t('incl. GST {tax}', { tax: rupees(cart.totals.tax) })}</span>}
           </p>
           <p className="text-3xl font-black tabular-nums">{rupees(total)}</p>
         </div>
@@ -483,7 +488,7 @@ export const QuickBill = () => {
                 method === 'credit' && !customer && 'opacity-40'
               )}
             >
-              {method === 'split' ? 'Part' : method}
+              {method === 'split' ? t('Part') : paymentLabel(method)}
             </button>
           ))}
         </div>
@@ -492,7 +497,7 @@ export const QuickBill = () => {
             <div className="grid grid-cols-2 gap-2">
               {([['Cash now', partCash, setPartCash], ['UPI now', partUpi, setPartUpi]] as const).map(([label, value, setValue]) => (
                 <label key={label} className="block">
-                  <span className="block px-1 text-[11px] font-bold uppercase text-gray-500">{label}</span>
+                  <span className="block px-1 text-[11px] font-bold uppercase text-gray-500">{t(label)}</span>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -511,12 +516,12 @@ export const QuickBill = () => {
               onCredit < 0 || (onCredit > 0 && !customer) ? 'text-red-600' : 'text-gray-700'
             )}>
               {onCredit < 0
-                ? `${rupees(-onCredit)} more than the bill`
+                ? t('{rupees} more than the bill', { rupees: rupees(-onCredit) })
                 : onCredit === 0
-                  ? 'Paid in full'
+                  ? t('Paid in full')
                   : customer
-                    ? `${rupees(onCredit)} on ${customerDisplayName(customer)}’s credit`
-                    : `${rupees(onCredit)} left — choose the bakery to put it on credit`}
+                    ? t('{onCredit} on {customer}’s credit', { onCredit: rupees(onCredit), customer: customerDisplayName(customer) })
+                    : t('{onCredit} left — choose the bakery to put it on credit', { onCredit: rupees(onCredit) })}
             </p>
           </div>
         )}
@@ -567,8 +572,8 @@ export const QuickBill = () => {
         if (!line) return null;
         return (
           <KeypadSheet
-            title={line.name}
-            unit={line.metric}
+            title={itemLabel(line.name)}
+            unit={unitLabel(line.metric)}
             initial={line.quantity}
             allowDecimal={isLooseUnit(line.metric)}
             max={line.available}
@@ -592,7 +597,7 @@ export const QuickBill = () => {
           <div className="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
             <Check size={44} strokeWidth={3} />
           </div>
-          <p className="mt-5 text-sm font-bold uppercase text-gray-400">Bill saved</p>
+          <p className="mt-5 text-sm font-bold uppercase text-gray-400">{t('Bill saved')}</p>
           <p className="mt-1 text-4xl font-black tabular-nums">{rupees(done.total)}</p>
           <p className="mt-2 font-mono font-bold text-gray-700">{done.billNumber}</p>
           <p className="text-gray-500">{done.customer}</p>
@@ -607,7 +612,7 @@ export const QuickBill = () => {
           )}
           <div className="mt-8 w-full max-w-sm space-y-2">
             <button onClick={newBill} className="h-14 w-full rounded-2xl bg-orange-600 text-lg font-black text-white active:bg-orange-700">
-              New bill
+              {t('New bill')}
             </button>
             <button
               onClick={sharePdfOnWhatsApp}
@@ -615,18 +620,18 @@ export const QuickBill = () => {
               className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#25D366] font-bold text-white active:bg-[#1ebe5b] disabled:opacity-60"
             >
               <MessageCircle size={20} />
-              {sharing ? 'Preparing bill PDF…' : 'Send bill PDF on WhatsApp'}
+              {sharing ? t('Preparing bill PDF…') : t('Send bill PDF on WhatsApp')}
             </button>
             <button
               onClick={shareOnWhatsApp}
               disabled={sharing}
               className="w-full py-1 text-sm font-semibold text-gray-500 underline-offset-2 active:underline disabled:opacity-50"
             >
-              or send as a text message
+              {t('or send as a text message')}
             </button>
             {printMode !== 'none' && (
               <button onClick={printAgain} disabled={printState.kind === 'working'} className="h-12 w-full rounded-2xl border border-gray-200 font-bold text-gray-700 active:bg-gray-50 disabled:opacity-50">
-                Print again
+                {t('Print again')}
               </button>
             )}
           </div>
@@ -648,7 +653,7 @@ const SheetFrame = ({ title, onClose, children, tall }: { title: string; onClose
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
           <p className="text-lg font-black">{title}</p>
-          <button onClick={onClose} aria-label="Close" className="flex h-11 w-11 items-center justify-center rounded-xl active:bg-gray-100">
+          <button onClick={onClose} aria-label={t('Close')} className="flex h-11 w-11 items-center justify-center rounded-xl active:bg-gray-100">
             <X size={22} />
           </button>
         </div>
@@ -687,13 +692,13 @@ const CustomerSheet = ({ customers, selectedId, onPick, onClose }: {
   }, [customers, query]);
 
   return (
-    <SheetFrame title="Customer" onClose={onClose} tall>
-      <SearchBox value={query} onChange={setQuery} placeholder="Bakery, name or phone" />
+    <SheetFrame title={t('Customer')} onClose={onClose} tall>
+      <SearchBox value={query} onChange={setQuery} placeholder={t('Bakery, name or phone')} />
       <ul className="mt-2 flex-1 overflow-y-auto px-2">
         <li>
           <button onClick={() => onPick(null)} className={cn('w-full rounded-xl px-3 py-3 text-left active:bg-gray-100', selectedId === null && 'bg-orange-50')}>
-            <span className="font-bold">Walk-in customer</span>
-            <span className="block text-xs text-gray-500">Cash or UPI only</span>
+            <span className="font-bold">{t('Walk-in customer')}</span>
+            <span className="block text-xs text-gray-500">{t('Cash or UPI only')}</span>
           </button>
         </li>
         {matches.map((c) => (
@@ -701,7 +706,7 @@ const CustomerSheet = ({ customers, selectedId, onPick, onClose }: {
             <button onClick={() => onPick(c)} className={cn('w-full rounded-xl px-3 py-3 text-left active:bg-gray-100', selectedId === c.id && 'bg-orange-50')}>
               <span className="flex items-center justify-between gap-2">
                 <span className="truncate font-bold">{customerDisplayName(c)}</span>
-                {c.credit_balance > 0 && <span className="shrink-0 text-xs font-bold text-red-600">owes {rupees(c.credit_balance)}</span>}
+                {c.credit_balance > 0 && <span className="shrink-0 text-xs font-bold text-red-600">{t('owes {credit_balance}', { credit_balance: rupees(c.credit_balance) })}</span>}
               </span>
               <span className="block truncate text-xs text-gray-500">{[customerContactName(c), c.phone].filter(Boolean).join(' · ')}</span>
             </button>
@@ -752,11 +757,11 @@ const SearchSheet = ({ catalogue, complete, lines, onAdd, onStep, onSet, onClose
   const keypadLine = keypadFor ? lineFor(keypadFor.id) : undefined;
 
   return (
-    <SheetFrame title="Add items" onClose={onClose} tall>
-      <SearchBox value={query} onChange={setQuery} placeholder="Type part of the item name" />
-      <p className="px-4 pt-2 text-xs text-gray-400">Tap + to add one, or tap an item to type the quantity.</p>
+    <SheetFrame title={t('Add items')} onClose={onClose} tall>
+      <SearchBox value={query} onChange={setQuery} placeholder={t('Type part of the item name')} />
+      <p className="px-4 pt-2 text-xs text-gray-400">{t('Tap + to add one, or tap an item to type the quantity.')}</p>
       <ul className="mt-1 flex-1 overflow-y-auto px-2">
-        {matches.length === 0 && <li className="py-10 text-center text-sm text-gray-400">No item matches “{query}”.</li>}
+        {matches.length === 0 && <li className="py-10 text-center text-sm text-gray-400">{t('No item matches “{query}”.', { query })}</li>}
         {matches.map((item) => {
           const out = item.stock_quantity <= 0;
           const line = lineFor(item.id);
@@ -768,20 +773,20 @@ const SearchSheet = ({ catalogue, complete, lines, onAdd, onStep, onSet, onClose
                 onClick={() => setKeypadFor(item)}
                 className="min-w-0 flex-1 rounded-xl px-2 py-3 text-left active:bg-gray-100 disabled:opacity-40"
               >
-                <span className="block truncate font-bold">{item.name}</span>
+                <span className="block font-bold"><ItemName name={item.name} truncate /></span>
                 <span className="block text-xs text-gray-500">
-                  {rupees(item.price)} / {item.metric} · {out ? 'out of stock' : `${qty(item.stock_quantity)} in stock`}
+                  {rupees(item.price)} / {unitLabel(item.metric)} · {out ? t('out of stock') : t('{stock_quantity} in stock', { stock_quantity: qty(item.stock_quantity) })}
                 </span>
               </button>
               {line ? (
                 <div className="flex shrink-0 items-center gap-0.5">
-                  <button onClick={() => onStep(line.id, line.quantity, -step)} aria-label={`Less ${item.name}`} className="flex h-8 w-8 items-center justify-center rounded-lg bg-white border border-gray-200 active:bg-gray-100">
+                  <button onClick={() => onStep(line.id, line.quantity, -step)} aria-label={t('Less {name}', { name: itemLabel(item.name) })} className="flex h-8 w-8 items-center justify-center rounded-lg bg-white border border-gray-200 active:bg-gray-100">
                     <Minus size={14} />
                   </button>
                   <button onClick={() => setKeypadFor(item)} className="h-8 min-w-[2.25rem] rounded-lg border border-orange-300 bg-white px-1.5 text-sm font-black tabular-nums text-orange-800 active:bg-orange-50">
                     {qty(line.quantity)}
                   </button>
-                  <button onClick={() => onStep(line.id, line.quantity, step)} aria-label={`More ${item.name}`} className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-900 text-white active:bg-gray-700">
+                  <button onClick={() => onStep(line.id, line.quantity, step)} aria-label={t('More {name}', { name: itemLabel(item.name) })} className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-900 text-white active:bg-gray-700">
                     <Plus size={14} />
                   </button>
                 </div>
@@ -789,7 +794,7 @@ const SearchSheet = ({ catalogue, complete, lines, onAdd, onStep, onSet, onClose
                 <button
                   disabled={out}
                   onClick={() => onAdd(item, 1)}
-                  aria-label={`Add ${item.name}`}
+                  aria-label={t('Add {name}', { name: itemLabel(item.name) })}
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-900 text-white active:bg-gray-700 disabled:opacity-30"
                 >
                   <Plus size={14} />
@@ -801,14 +806,14 @@ const SearchSheet = ({ catalogue, complete, lines, onAdd, onStep, onSet, onClose
       </ul>
       <div className="px-4 pt-2">
         <button onClick={onClose} className="h-12 w-full rounded-2xl bg-orange-600 font-black text-white active:bg-orange-700">
-          Done{lines.length ? ` · ${lines.length} item${lines.length === 1 ? '' : 's'} in bill` : ''}
+          {t('Done')}{lines.length ? tn(lines.length, ' · 1 item in bill', ' · {count} items in bill') : ''}
         </button>
       </div>
 
       {keypadFor && (
         <KeypadSheet
-          title={keypadFor.name}
-          unit={keypadFor.metric}
+          title={itemLabel(keypadFor.name)}
+          unit={unitLabel(keypadFor.metric)}
           initial={keypadLine?.quantity ?? 1}
           allowDecimal={isLooseUnit(keypadFor.metric)}
           max={keypadLine?.available ?? keypadFor.stock_quantity}
@@ -861,7 +866,7 @@ const KeypadSheet = ({ title, unit, initial, allowDecimal, max, onDone, onClose,
           {entry === '' ? qty(initial) : entry} <span className="text-lg font-bold text-gray-400">{unit}</span>
         </p>
         <p className={cn('mt-1 text-sm', tooMany ? 'font-bold text-red-600' : 'text-gray-400')}>
-          {qty(max)} in stock
+          {t('{max} in stock', { max: qty(max) })}
         </p>
       </div>
       <div className="grid grid-cols-3 gap-2 px-4 pt-4">
@@ -871,7 +876,7 @@ const KeypadSheet = ({ title, unit, initial, allowDecimal, max, onDone, onClose,
               key={key}
               onClick={() => press(key)}
               className="flex h-14 items-center justify-center rounded-2xl bg-gray-100 text-2xl font-bold active:bg-gray-200"
-              aria-label={key === 'del' ? 'Delete' : key}
+              aria-label={key === 'del' ? t('Delete') : key}
             >
               {key === 'del' ? <Delete size={24} /> : key}
             </button>
@@ -884,7 +889,7 @@ const KeypadSheet = ({ title, unit, initial, allowDecimal, max, onDone, onClose,
           disabled={tooMany || Number.isNaN(value)}
           className="h-14 w-full rounded-2xl bg-orange-600 text-lg font-black text-white active:bg-orange-700 disabled:opacity-40"
         >
-          {value > 0 ? `${verb} ${qty(value)} ${unit}` : verb === 'Add' ? 'Cancel' : 'Remove item'}
+          {value > 0 ? (verb === 'Add' ? t('Add {quantity} {unit}', { quantity: qty(value), unit }) : t('Set {quantity} {unit}', { quantity: qty(value), unit })) : verb === 'Add' ? t('Cancel') : t('Remove item')}
         </button>
       </div>
     </SheetFrame>
@@ -906,7 +911,7 @@ const SettingsSheet = ({ printer, canBluetooth, onChange, onLogout, onClose }: {
     try {
       setDevices(await listPairedPrinters());
     } catch (err: any) {
-      setError(err?.message || 'Could not read Bluetooth devices. Allow the Nearby devices permission and try again.');
+      setError(err?.message || t('Could not read Bluetooth devices. Allow the Nearby devices permission and try again.'));
     }
   };
 
@@ -920,25 +925,29 @@ const SettingsSheet = ({ printer, canBluetooth, onChange, onLogout, onClose }: {
       onClick={() => { onChange({ ...printer, mode }); if (mode === 'bluetooth') void findPrinters(); }}
       className={cn('w-full rounded-2xl border px-4 py-3 text-left disabled:opacity-40', printer.mode === mode ? 'border-orange-400 bg-orange-50' : 'border-gray-200')}
     >
-      <span className="font-bold">{label}</span>
-      <span className="block text-xs text-gray-500">{hint}</span>
+      <span className="font-bold">{t(label)}</span>
+      <span className="block text-xs text-gray-500">{t(hint)}</span>
     </button>
   );
 
   return (
-    <SheetFrame title="Settings" onClose={onClose}>
+    <SheetFrame title={t('Settings')} onClose={onClose}>
       <div className="space-y-2 overflow-y-auto px-4 pt-4">
-        <p className="text-xs font-bold uppercase text-gray-400">Print bills on</p>
+        <div className="flex items-center justify-between gap-3 pb-2">
+          <p className="text-xs font-bold uppercase text-gray-400">Language / ಭಾಷೆ</p>
+          <LanguageSwitch />
+        </div>
+        <p className="text-xs font-bold uppercase text-gray-400">{t('Print bills on')}</p>
         {option('counter', 'Counter printer', 'The counter computer prints each bill automatically')}
         {option('bluetooth', 'My Bluetooth printer', canBluetooth ? 'A thermal printer paired with this phone' : 'Available in the Android app', !canBluetooth)}
         {option('none', 'Don’t print', 'Reprint later from History if needed')}
 
         {printer.mode === 'bluetooth' && canBluetooth && (
           <div className="rounded-2xl bg-gray-50 p-3">
-            <p className="text-xs font-bold uppercase text-gray-400">Printer</p>
+            <p className="text-xs font-bold uppercase text-gray-400">{t('Printer')}</p>
             {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
             {devices && devices.length === 0 && (
-              <p className="mt-1 text-sm text-gray-600">No paired devices. Pair the printer in Android’s Bluetooth settings first, then come back.</p>
+              <p className="mt-1 text-sm text-gray-600">{t('No paired devices. Pair the printer in Android’s Bluetooth settings first, then come back.')}</p>
             )}
             <div className="mt-2 space-y-1">
               {(devices ?? []).map((device) => (
@@ -952,8 +961,8 @@ const SettingsSheet = ({ printer, canBluetooth, onChange, onLogout, onClose }: {
                 </button>
               ))}
             </div>
-            <button onClick={findPrinters} className="mt-2 text-sm font-bold text-orange-700">Refresh list</button>
-            <p className="mt-3 text-xs font-bold uppercase text-gray-400">Paper</p>
+            <button onClick={findPrinters} className="mt-2 text-sm font-bold text-orange-700">{t('Refresh list')}</button>
+            <p className="mt-3 text-xs font-bold uppercase text-gray-400">{t('Paper')}</p>
             <div className="mt-1 grid grid-cols-2 gap-2">
               {([58, 80] as const).map((paper) => (
                 <button
@@ -961,7 +970,7 @@ const SettingsSheet = ({ printer, canBluetooth, onChange, onLogout, onClose }: {
                   onClick={() => onChange({ ...printer, paper })}
                   className={cn('h-10 rounded-xl text-sm font-bold', printer.paper === paper ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200')}
                 >
-                  {paper} mm
+                  {t('{paper} mm', { paper })}
                 </button>
               ))}
             </div>
@@ -969,7 +978,7 @@ const SettingsSheet = ({ printer, canBluetooth, onChange, onLogout, onClose }: {
         )}
 
         <button onClick={onLogout} className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-gray-200 font-bold text-red-600 active:bg-red-50">
-          <LogOut size={18} /> Sign out
+          <LogOut size={18} /> {t('Sign out')}
         </button>
       </div>
     </SheetFrame>

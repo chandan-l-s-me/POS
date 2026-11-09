@@ -403,6 +403,9 @@ export function initDb() {
   // them off from their own purchases. What the shop owes is per supplier, so
   // each purchase now points at its supplier row.
   ensureColumn('purchases', 'supplier_id', 'INTEGER REFERENCES suppliers(id)');
+  // The item's name in Kannada, for staff who read it more easily. NULL until
+  // server/translate.ts fills it in; '' if there was nothing usable.
+  ensureColumn('items', 'name_kn', 'TEXT');
   linkPurchasesToSuppliers();
   if (!hadSupplierPayments) markExistingPurchasesPaid();
 

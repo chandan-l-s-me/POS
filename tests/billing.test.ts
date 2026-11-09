@@ -90,6 +90,22 @@ describe('bill arithmetic', () => {
     assert.equal(line.igst_rate, 0);
   });
 
+  it('charges the 40% slab as 20% CGST + 20% SGST', async () => {
+    const item = await makeItem({ price: 140, gst_rate: 40, sgst_rate: 20, cgst_rate: 20 });
+    const created = await admin.post('/api/bills', {
+      items: [{ id: item.id, quantity: 3 }],
+      payment_method: 'cash',
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+
+    const line = (await admin.get(`/api/bills/${created.body.bill_id}`)).body.items[0];
+    assert.equal(round2(line.total_amount - line.sgst_amount - line.cgst_amount), 300);
+    assert.equal(line.cgst_amount, 60);
+    assert.equal(line.sgst_amount, 60);
+    assert.equal(line.cgst_rate, 20);
+    assert.equal(line.sgst_rate, 20);
+  });
+
   it('charges IGST instead of SGST/CGST for an inter-state item', async () => {
     const item = await makeItem({ price: 200, gst_mode: 'igst', gst_rate: 12, sgst_rate: 0, cgst_rate: 0, igst_rate: 12 });
     const created = await admin.post('/api/bills', {

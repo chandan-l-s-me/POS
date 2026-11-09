@@ -5,6 +5,8 @@ import { DateFilterButton, DateFilterPanel } from './DateFilter';
 import type { Purchase } from '../types';
 import { cn, formatDateTimeInIST } from '../lib/utils';
 import { formatDay, formatRupees, paymentMethodLabel } from '../lib/supplierPayments';
+import { t, unitLabel } from '../i18n';
+import { ItemName } from './ItemName';
 
 const PAGE_SIZE = 50;
 
@@ -46,7 +48,7 @@ export const PurchaseHistory = () => {
         setTotal(res?.total ?? 0);
         setError('');
       })
-      .catch((err: any) => setError(err?.message || 'Could not load purchases.'))
+      .catch((err: any) => setError(err?.message || t('Could not load purchases.')))
       .finally(() => setLoading(false));
   }, [startDate, endDate, appliedSearch, page]);
 
@@ -69,7 +71,7 @@ export const PurchaseHistory = () => {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by purchase no., supplier, invoice or item..."
+            placeholder={t('Search by purchase no., supplier, invoice or item...')}
             className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
           />
         </div>
@@ -81,24 +83,24 @@ export const PurchaseHistory = () => {
       )}
 
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Purchases table">
+        <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={t('Purchases table')}>
           <table className="w-full text-left">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
                 {['Purchase No.', 'Date & Time', 'Supplier', 'Invoice', 'Entered By', 'Amount', 'Payment', ''].map((heading, index) => (
                   <th key={index} className={cn('px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider', index >= 5 && 'text-right')}>
-                    {heading}
+                    {heading && t(heading)}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
               {loading ? (
-                <tr><td colSpan={8} className="px-6 py-12 text-center text-gray-400">Loading purchases...</td></tr>
+                <tr><td colSpan={8} className="px-6 py-12 text-center text-gray-400">{t('Loading purchases...')}</td></tr>
               ) : error ? (
                 <tr><td colSpan={8} className="px-6 py-12 text-center text-red-600">{error}</td></tr>
               ) : purchases.length === 0 ? (
-                <tr><td colSpan={8} className="px-6 py-12 text-center text-gray-400">No purchases found</td></tr>
+                <tr><td colSpan={8} className="px-6 py-12 text-center text-gray-400">{t('No purchases found')}</td></tr>
               ) : (
                 purchases.map((purchase) => (
                   <tr key={purchase.id} onClick={() => open(purchase.id)} className="cursor-pointer hover:bg-gray-50 transition-colors">
@@ -117,10 +119,10 @@ export const PurchaseHistory = () => {
                     <td className="px-6 py-4 text-right">
                       {(purchase.balance_due ?? 0) > 0 ? (
                         <span className="text-xs font-bold px-2 py-1 rounded-full bg-amber-50 text-amber-700 whitespace-nowrap">
-                          Due {formatRupees(purchase.balance_due ?? 0)}
+                          {t('Due {rupees}', { rupees: formatRupees(purchase.balance_due ?? 0) })}
                         </span>
                       ) : (
-                        <span className="text-xs font-bold px-2 py-1 rounded-full bg-emerald-50 text-emerald-700">Paid</span>
+                        <span className="text-xs font-bold px-2 py-1 rounded-full bg-emerald-50 text-emerald-700">{t('Paid')}</span>
                       )}
                     </td>
                     <td className="px-4 py-4 text-right text-gray-400"><ChevronRight size={20} className="inline" /></td>
@@ -134,8 +136,8 @@ export const PurchaseHistory = () => {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-6 py-4">
           <p className="text-sm text-gray-500">
             {total === 0
-              ? 'No purchases match this filter'
-              : `Showing ${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)} of ${total.toLocaleString('en-IN')}`}
+              ? t('No purchases match this filter')
+              : t('Showing {value}–{value2} of {value3}', { value: page * PAGE_SIZE + 1, value2: Math.min((page + 1) * PAGE_SIZE, total), value3: total.toLocaleString('en-IN') })}
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -143,15 +145,15 @@ export const PurchaseHistory = () => {
               disabled={page === 0 || loading}
               className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
             >
-              Previous
+              {t('Previous')}
             </button>
-            <span className="px-2 text-sm font-semibold text-gray-500">Page {page + 1} of {pageCount.toLocaleString('en-IN')}</span>
+            <span className="px-2 text-sm font-semibold text-gray-500">{t('Page {value} of {value2}', { value: page + 1, value2: pageCount.toLocaleString('en-IN') })}</span>
             <button
               onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
               disabled={page >= pageCount - 1 || loading}
               className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
             >
-              Next
+              {t('Next')}
             </button>
           </div>
         </div>
@@ -182,10 +184,10 @@ const PurchaseDetail = ({ purchase, onClose }: { purchase: Purchase; onClose: ()
             <p className="font-mono text-sm font-bold text-gray-500">{purchase.purchase_number}</p>
             <h3 className="mt-0.5 truncate text-xl font-bold text-gray-900 sm:text-2xl">{purchase.supplier_name}</h3>
             <p className="mt-1 text-sm text-gray-500">
-              {formatDateTimeInIST(purchase.created_at)} · entered by {purchase.user_name}
+              {t('{created_at} · entered by {user_name}', { created_at: formatDateTimeInIST(purchase.created_at), user_name: purchase.user_name })}
             </p>
           </div>
-          <button onClick={onClose} aria-label="Close" className="rounded-full p-2 hover:bg-gray-100">
+          <button onClick={onClose} aria-label={t('Close')} className="rounded-full p-2 hover:bg-gray-100">
             <X size={24} />
           </button>
         </div>
@@ -193,21 +195,21 @@ const PurchaseDetail = ({ purchase, onClose }: { purchase: Purchase; onClose: ()
         <div className="space-y-6 overflow-y-auto px-5 py-5 sm:px-8 sm:py-6">
           <div className="grid gap-3 text-sm sm:grid-cols-3">
             <div className="rounded-2xl bg-gray-50 p-4">
-              <p className="text-xs font-bold uppercase text-gray-400">Supplier invoice</p>
+              <p className="text-xs font-bold uppercase text-gray-400">{t('Supplier invoice')}</p>
               <p className="mt-1 font-semibold text-gray-900">{purchase.invoice_number || '—'}</p>
               {purchase.invoice_date && <p className="text-gray-500">{formatDay(purchase.invoice_date)}</p>}
             </div>
             <div className="rounded-2xl bg-gray-50 p-4">
-              <p className="text-xs font-bold uppercase text-gray-400">Supplier</p>
-              <p className="mt-1 text-gray-700">{purchase.supplier_gstin || 'No GSTIN'}</p>
+              <p className="text-xs font-bold uppercase text-gray-400">{t('Supplier')}</p>
+              <p className="mt-1 text-gray-700">{purchase.supplier_gstin || t('No GSTIN')}</p>
               {purchase.supplier_phone && <p className="text-gray-500">{purchase.supplier_phone}</p>}
             </div>
             <div className={cn('rounded-2xl p-4', due > 0 ? 'bg-amber-50' : 'bg-emerald-50')}>
-              <p className="text-xs font-bold uppercase text-gray-400">Payment</p>
+              <p className="text-xs font-bold uppercase text-gray-400">{t('Payment')}</p>
               <p className={cn('mt-1 font-bold', due > 0 ? 'text-amber-700' : 'text-emerald-700')}>
-                {due > 0 ? `${formatRupees(due)} still due` : 'Paid in full'}
+                {due > 0 ? t('{due} still due', { due: formatRupees(due) }) : t('Paid in full')}
               </p>
-              <p className="text-gray-500">Paid {formatRupees(purchase.amount_paid ?? 0)}</p>
+              <p className="text-gray-500">{t('Paid {rupees}', { rupees: formatRupees(purchase.amount_paid ?? 0) })}</p>
             </div>
           </div>
 
@@ -215,23 +217,23 @@ const PurchaseDetail = ({ purchase, onClose }: { purchase: Purchase; onClose: ()
             <table className="w-full text-left text-sm">
               <thead className="bg-gray-50 text-xs font-bold uppercase text-gray-400">
                 <tr>
-                  <th className="px-4 py-3">Item</th>
-                  <th className="px-4 py-3 text-right">Qty</th>
-                  <th className="px-4 py-3 text-right">Cost / unit</th>
-                  <th className="px-4 py-3 text-right">GST</th>
-                  <th className="px-4 py-3 text-right">Total</th>
+                  <th className="px-4 py-3">{t('Item')}</th>
+                  <th className="px-4 py-3 text-right">{t('Qty')}</th>
+                  <th className="px-4 py-3 text-right">{t('Cost / unit')}</th>
+                  <th className="px-4 py-3 text-right">{t('GST')}</th>
+                  <th className="px-4 py-3 text-right">{t('Total')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {(purchase.items || []).map((line) => {
-                  const rate = line.igst_rate > 0 ? `IGST ${line.igst_rate}%` : line.sgst_rate + line.cgst_rate > 0 ? `${line.sgst_rate + line.cgst_rate}%` : '—';
+                  const rate = line.igst_rate > 0 ? t('IGST {rate}%', { rate: line.igst_rate }) : line.sgst_rate + line.cgst_rate > 0 ? `${line.sgst_rate + line.cgst_rate}%` : '—';
                   return (
                     <tr key={line.id}>
                       <td className="px-4 py-3">
-                        <p className="font-semibold text-gray-900">{line.item_name}</p>
-                        {line.hsn_code && <p className="text-xs text-gray-400">HSN {line.hsn_code}</p>}
+                        <p className="font-semibold text-gray-900"><ItemName name={line.item_name} /></p>
+                        {line.hsn_code && <p className="text-xs text-gray-400">{t('HSN {hsn_code}', { hsn_code: line.hsn_code })}</p>}
                       </td>
-                      <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap">{line.quantity} {line.metric}</td>
+                      <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap">{line.quantity} {unitLabel(line.metric)}</td>
                       <td className="px-4 py-3 text-right tabular-nums">{formatRupees(line.unit_cost)}</td>
                       <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap">
                         {formatRupees(line.sgst_amount + line.cgst_amount + line.igst_amount)}
@@ -243,16 +245,16 @@ const PurchaseDetail = ({ purchase, onClose }: { purchase: Purchase; onClose: ()
                 })}
               </tbody>
               <tfoot className="border-t border-gray-200 bg-gray-50 text-sm">
-                <tr><td colSpan={4} className="px-4 py-2 text-right text-gray-500">Taxable value</td><td className="px-4 py-2 text-right tabular-nums">{formatRupees(purchase.subtotal_amount)}</td></tr>
-                <tr><td colSpan={4} className="px-4 py-2 text-right text-gray-500">GST</td><td className="px-4 py-2 text-right tabular-nums">{formatRupees(purchase.tax_amount)}</td></tr>
-                <tr><td colSpan={4} className="px-4 py-2 text-right font-bold text-gray-900">Total</td><td className="px-4 py-2 text-right font-black tabular-nums text-gray-900">{formatRupees(purchase.total_amount)}</td></tr>
+                <tr><td colSpan={4} className="px-4 py-2 text-right text-gray-500">{t('Taxable value')}</td><td className="px-4 py-2 text-right tabular-nums">{formatRupees(purchase.subtotal_amount)}</td></tr>
+                <tr><td colSpan={4} className="px-4 py-2 text-right text-gray-500">{t('GST')}</td><td className="px-4 py-2 text-right tabular-nums">{formatRupees(purchase.tax_amount)}</td></tr>
+                <tr><td colSpan={4} className="px-4 py-2 text-right font-bold text-gray-900">{t('Total')}</td><td className="px-4 py-2 text-right font-black tabular-nums text-gray-900">{formatRupees(purchase.total_amount)}</td></tr>
               </tfoot>
             </table>
           </div>
 
           {(purchase.payments || []).length > 0 && (
             <div>
-              <p className="mb-2 text-sm font-bold text-gray-900">Payments</p>
+              <p className="mb-2 text-sm font-bold text-gray-900">{t('Payments')}</p>
               <ul className="divide-y divide-gray-100 rounded-2xl border border-gray-100 text-sm">
                 {(purchase.payments || []).map((payment) => (
                   <li key={payment.payment_id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">

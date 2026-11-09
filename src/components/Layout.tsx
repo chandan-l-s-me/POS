@@ -25,6 +25,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { PrintStation } from './PrintStation';
 import { ProfileMenu } from './ProfileMenu';
+import { LanguageSwitch } from './LanguageSwitch';
+import { t } from '../i18n';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -41,34 +43,34 @@ interface NavItem {
 // purchase pages (the switch at the top picks which), then the pages both
 // sides share.
 const OVERVIEW_ITEMS: NavItem[] = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard', roles: ['admin'] },
+  { to: '/', icon: LayoutDashboard, get label() { return t('Dashboard'); }, roles: ['admin'] },
 ];
 const SALES_ITEMS: NavItem[] = [
-  { to: '/billing', icon: ShoppingCart, label: 'Billing', roles: ['admin', 'cashier'] },
-  { to: '/customers', icon: Users, label: 'Customers', roles: ['admin', 'cashier'] },
-  { to: '/history', icon: History, label: 'Sales History', roles: ['admin', 'cashier'] },
-  { to: '/sales-credit', icon: HandCoins, label: 'Sales Credit', roles: ['admin', 'cashier'] },
+  { to: '/billing', icon: ShoppingCart, get label() { return t('Billing'); }, roles: ['admin', 'cashier'] },
+  { to: '/customers', icon: Users, get label() { return t('Customers'); }, roles: ['admin', 'cashier'] },
+  { to: '/history', icon: History, get label() { return t('Sales History'); }, roles: ['admin', 'cashier'] },
+  { to: '/sales-credit', icon: HandCoins, get label() { return t('Sales Credit'); }, roles: ['admin', 'cashier'] },
 ];
 const PURCHASE_ITEMS: NavItem[] = [
-  { to: '/purchases', icon: Truck, label: 'Purchase Entry', roles: ['admin'] },
-  { to: '/suppliers', icon: Building2, label: 'Suppliers', roles: ['admin'] },
-  { to: '/history?view=purchases', icon: History, label: 'Purchase History', roles: ['admin'] },
-  { to: '/purchase-credit', icon: Wallet, label: 'Purchase Credit', roles: ['admin'] },
-  { to: '/payments-done', icon: BadgeCheck, label: 'Payments Done', roles: ['admin'] },
+  { to: '/purchases', icon: Truck, get label() { return t('Purchase Entry'); }, roles: ['admin'] },
+  { to: '/suppliers', icon: Building2, get label() { return t('Suppliers'); }, roles: ['admin'] },
+  { to: '/history?view=purchases', icon: History, get label() { return t('Purchase History'); }, roles: ['admin'] },
+  { to: '/purchase-credit', icon: Wallet, get label() { return t('Purchase Credit'); }, roles: ['admin'] },
+  { to: '/payments-done', icon: BadgeCheck, get label() { return t('Payments Done'); }, roles: ['admin'] },
 ];
 const SHOP_ITEMS: NavItem[] = [
-  { to: '/items', icon: Package, label: 'Items', roles: ['admin', 'cashier'] },
-  { to: '/stock', icon: Warehouse, label: 'Stock', roles: ['admin', 'cashier'] },
-  { to: '/reports', icon: FileSpreadsheet, label: 'Reports', roles: ['admin'] },
+  { to: '/items', icon: Package, get label() { return t('Items'); }, roles: ['admin', 'cashier'] },
+  { to: '/stock', icon: Warehouse, get label() { return t('Stock'); }, roles: ['admin', 'cashier'] },
+  { to: '/reports', icon: FileSpreadsheet, get label() { return t('Reports'); }, roles: ['admin'] },
   // The activity log is under Settings → Activity log.
-  { to: '/settings', icon: SettingsIcon, label: 'Settings', roles: ['admin'] },
+  { to: '/settings', icon: SettingsIcon, get label() { return t('Settings'); }, roles: ['admin'] },
 ];
 const ALL_NAV_ITEMS = [...OVERVIEW_ITEMS, ...SALES_ITEMS, ...PURCHASE_ITEMS, ...SHOP_ITEMS];
 
 type MenuMode = 'sales' | 'purchases';
 const MENU_MODES: Array<{ id: MenuMode; label: string; icon: NavItem['icon'] }> = [
-  { id: 'sales', label: 'Sales', icon: ShoppingCart },
-  { id: 'purchases', label: 'Purchases', icon: Truck },
+  { id: 'sales', get label() { return t('Sales'); }, icon: ShoppingCart },
+  { id: 'purchases', get label() { return t('Purchases'); }, icon: Truck },
 ];
 const MENU_MODE_KEY = 'menu-mode';
 
@@ -220,7 +222,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
         <button
           onClick={onClose}
           className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          aria-label={expanded ? 'Collapse menu' : 'Expand menu'}
+          aria-label={expanded ? t('Collapse menu') : t('Expand menu')}
         >
           {closeIcon}
         </button>
@@ -229,7 +231,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
       {isAdmin && (
         <div className="px-3 pb-2 shrink-0">
           {expanded ? (
-            <div role="radiogroup" aria-label="Menu" className="grid grid-cols-2 gap-1 rounded-xl bg-gray-100 p-1">
+            <div role="radiogroup" aria-label={t('Menu')} className="grid grid-cols-2 gap-1 rounded-xl bg-gray-100 p-1">
               {MENU_MODES.map((option) => (
                 <button
                   key={option.id}
@@ -265,8 +267,8 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <button
                   type="button"
                   onClick={() => setMenuMode(other.id)}
-                  title={`Showing ${current.label.toLowerCase()} — switch to ${other.label.toLowerCase()}`}
-                  aria-label={`Switch menu to ${other.label.toLowerCase()}`}
+                  title={t('Showing {current} — switch to {other}', { current: current.label.toLowerCase(), other: other.label.toLowerCase() })}
+                  aria-label={t('Switch menu to {other}', { other: other.label.toLowerCase() })}
                   className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100 text-gray-700 hover:bg-gray-200"
                 >
                   <current.icon size={18} />
@@ -280,7 +282,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* Scrolls, so every page stays reachable on a short screen. */}
       <nav className="flex-1 min-h-0 overflow-y-auto px-3 pb-3 space-y-1">
         {renderLinks(OVERVIEW_ITEMS, expanded)}
-        {sectionLabel(shownMode === 'sales' ? 'Sales' : 'Purchases', expanded)}
+        {sectionLabel(shownMode === 'sales' ? t('Sales') : t('Purchases'), expanded)}
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={shownMode}
@@ -293,7 +295,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             {renderLinks(shownMode === 'sales' ? SALES_ITEMS : PURCHASE_ITEMS, expanded)}
           </motion.div>
         </AnimatePresence>
-        {sectionLabel('Shop', expanded)}
+        {sectionLabel(t('Shop'), expanded)}
         {renderLinks(SHOP_ITEMS, expanded)}
       </nav>
     </>
@@ -343,23 +345,24 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             <button
               onClick={() => setIsDrawerOpen(true)}
               className="lg:hidden p-2 -ml-1 rounded-lg text-gray-600 hover:bg-gray-100"
-              aria-label="Open menu"
+              aria-label={t('Open menu')}
             >
               <Menu size={22} />
             </button>
             <h2 className="truncate text-lg font-semibold text-gray-700">{pageTitle}</h2>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-4">
+            <LanguageSwitch compact />
             {canFullscreen && (
               <button
                 onClick={() => void toggleFullscreen()}
                 className="p-2.5 rounded-xl bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-900 transition-all"
-                aria-label={isFullscreen ? 'Leave full screen' : 'Enter full screen'}
+                aria-label={isFullscreen ? t('Leave full screen') : t('Enter full screen')}
                 aria-pressed={isFullscreen}
                 title={
                   isFullscreen
-                    ? 'Leave full screen (Esc, or Ctrl/Cmd+Shift+F)'
-                    : 'Full screen (Ctrl/Cmd+Shift+F)'
+                    ? t('Leave full screen (Esc, or Ctrl/Cmd+Shift+F)')
+                    : t('Full screen (Ctrl/Cmd+Shift+F)')
                 }
               >
                 {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
@@ -367,10 +370,10 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             )}
             <div
               className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full flex items-center gap-2"
-              title={isOnline ? 'Connected to the till server' : 'No connection to the till server'}
+              title={isOnline ? t('Connected to the till server') : t('No connection to the till server')}
             >
               <div className={cn("w-2 h-2 rounded-full", isOnline ? "bg-green-500 animate-pulse" : "bg-red-500")} />
-              <span className="hidden sm:inline">{isOnline ? 'Connected' : 'Offline'}</span>
+              <span className="hidden sm:inline">{isOnline ? t('Connected') : t('Offline')}</span>
             </div>
             <ProfileMenu />
           </div>

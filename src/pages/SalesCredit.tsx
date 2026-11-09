@@ -7,19 +7,20 @@ import type { AgeingKey, CustomerCredit, UnpaidCredit } from '../types';
 import { ageLabel, formatRupees } from '../lib/supplierPayments';
 import { round2 } from '../lib/billMath';
 import { cn, formatDateInIST, getISTTimestampForFileName } from '../lib/utils';
+import { t, withEnglish } from '../i18n';
 
 const AGEING: Array<{ key: AgeingKey; label: string; tone: string; bar: string }> = [
-  { key: 'd0_30', label: '0–30 days', tone: 'text-gray-900', bar: 'bg-emerald-500' },
-  { key: 'd31_60', label: '31–60 days', tone: 'text-amber-700', bar: 'bg-amber-400' },
-  { key: 'd61_90', label: '61–90 days', tone: 'text-orange-700', bar: 'bg-orange-500' },
-  { key: 'd90_plus', label: 'Over 90 days', tone: 'text-red-700', bar: 'bg-red-500' },
+  { key: 'd0_30', get label() { return t('0–30 days'); }, tone: 'text-gray-900', bar: 'bg-emerald-500' },
+  { key: 'd31_60', get label() { return t('31–60 days'); }, tone: 'text-amber-700', bar: 'bg-amber-400' },
+  { key: 'd61_90', get label() { return t('61–90 days'); }, tone: 'text-orange-700', bar: 'bg-orange-500' },
+  { key: 'd90_plus', get label() { return t('Over 90 days'); }, tone: 'text-red-700', bar: 'bg-red-500' },
 ];
 
 const FILTERS = [
-  { value: 0, label: 'All customers' },
-  { value: 30, label: 'Owing over 30 days' },
-  { value: 60, label: 'Owing over 60 days' },
-  { value: 90, label: 'Owing over 90 days' },
+  { value: 0, get label() { return t('All customers'); } },
+  { value: 30, get label() { return t('Owing over 30 days'); } },
+  { value: 60, get label() { return t('Owing over 60 days'); } },
+  { value: 90, get label() { return t('Owing over 90 days'); } },
 ];
 
 const ageClass = (days: number) =>
@@ -29,7 +30,7 @@ const ageClass = (days: number) =>
         : 'bg-gray-100 text-gray-600';
 
 const lineLabel = (line: UnpaidCredit) =>
-  line.bill_number ?? (line.kind === 'opening' ? 'Opening balance' : line.note ? 'Balance correction' : 'Credit');
+  line.bill_number ?? (line.kind === 'opening' ? t('Opening balance') : line.note ? t('Balance correction') : t('Credit'));
 
 const csvCell = (value: string | number | null | undefined) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
@@ -102,20 +103,19 @@ export const SalesCredit = () => {
   };
 
   const summary = [
-    { label: 'Total owed by customers', value: formatRupees(totalDue), accent: true },
-    { label: 'Customers owing', value: customers.length.toLocaleString('en-IN') },
-    { label: 'Owed over 60 days', value: formatRupees(overSixty), warn: overSixty > 0 },
-    { label: 'Oldest unpaid', value: customers.length ? ageLabel(oldestDays) : '—' },
+    { label: t('Total owed by customers'), value: formatRupees(totalDue), accent: true },
+    { label: t('Customers owing'), value: customers.length.toLocaleString('en-IN') },
+    { label: t('Owed over 60 days'), value: formatRupees(overSixty), warn: overSixty > 0 },
+    { label: t('Oldest unpaid'), value: customers.length ? ageLabel(oldestDays) : '—' },
   ];
 
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-6 2xl:px-8 py-6 border-b border-gray-100 bg-gradient-to-r from-sky-50 to-indigo-50">
-          <h1 className="text-2xl font-bold text-gray-900">Sales Credit</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('Sales Credit')}</h1>
           <p className="text-sm text-gray-600 mt-1">
-            What customers owe the shop, bill by bill. A repayment settles the customer’s oldest bills first, so the bills
-            listed are the ones still unpaid.
+            {t('What customers owe the shop, bill by bill. A repayment settles the customer’s oldest bills first, so the bills listed are the ones still unpaid.')}
           </p>
         </div>
         <div className="grid gap-4 p-6 2xl:px-8 sm:grid-cols-2 xl:grid-cols-4">
@@ -139,7 +139,7 @@ export const SalesCredit = () => {
 
         {totalDue > 0 && (
           <div className="px-6 2xl:px-8 pb-6">
-            <p className="text-xs font-bold uppercase text-gray-500 mb-2">Ageing</p>
+            <p className="text-xs font-bold uppercase text-gray-500 mb-2">{t('Ageing')}</p>
             <div className="flex h-3 w-full overflow-hidden rounded-full bg-gray-100">
               {AGEING.map((bucket) => ageing[bucket.key] > 0 && (
                 <div
@@ -171,12 +171,12 @@ export const SalesCredit = () => {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search bakery, contact, phone or bill no."
+              placeholder={t('Search bakery, contact, phone or bill no.')}
               className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
             />
           </div>
           <select
-            aria-label="Show customers"
+            aria-label={t('Show customers')}
             value={minAge}
             onChange={(e) => setMinAge(Number(e.target.value))}
             className="px-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm font-semibold text-gray-700"
@@ -185,12 +185,12 @@ export const SalesCredit = () => {
           </select>
         </div>
         <button
-          onClick={handleExport}
+          onClick={() => withEnglish(handleExport)}
           disabled={customers.length === 0}
           className="flex items-center gap-2 px-4 py-3 bg-white border border-gray-200 text-gray-600 font-bold rounded-2xl hover:bg-gray-50 transition-all disabled:opacity-50 disabled:pointer-events-none"
         >
           <Download size={20} />
-          Export CSV
+          {t('Export CSV')}
         </button>
       </div>
 
@@ -202,14 +202,14 @@ export const SalesCredit = () => {
       )}
 
       {loading ? (
-        <p className="py-12 text-center text-gray-400">Loading sales credit…</p>
+        <p className="py-12 text-center text-gray-400">{t('Loading sales credit…')}</p>
       ) : customers.length === 0 ? (
         <div className="bg-white rounded-3xl border border-gray-100 py-16 text-center">
-          <p className="text-lg font-bold text-gray-900">No customer owes anything</p>
-          <p className="text-sm text-gray-500 mt-1">Bills sold on credit will show up here until they are paid.</p>
+          <p className="text-lg font-bold text-gray-900">{t('No customer owes anything')}</p>
+          <p className="text-sm text-gray-500 mt-1">{t('Bills sold on credit will show up here until they are paid.')}</p>
         </div>
       ) : filtered.length === 0 ? (
-        <p className="py-12 text-center text-gray-400">No customer matches this search or filter.</p>
+        <p className="py-12 text-center text-gray-400">{t('No customer matches this search or filter.')}</p>
       ) : (
         filtered.map((customer) => (
           <div key={customer.id} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
@@ -227,15 +227,15 @@ export const SalesCredit = () => {
                     {customer.phone && (<span className="inline-flex items-center gap-1"><Phone size={12} />{customer.phone}</span>)}
                     <span>
                       {customer.last_payment_at
-                        ? `Last paid ${formatRupees(Math.abs(customer.last_payment_amount ?? 0))} on ${formatDateInIST(customer.last_payment_at)}`
-                        : 'No repayment recorded'}
+                        ? t('Last paid {rupees} on {last_payment_at}', { rupees: formatRupees(Math.abs(customer.last_payment_amount ?? 0)), last_payment_at: formatDateInIST(customer.last_payment_at) })
+                        : t('No repayment recorded')}
                     </span>
                   </p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 <div className="text-right">
-                  <p className="text-xs font-bold uppercase text-gray-400">Owes</p>
+                  <p className="text-xs font-bold uppercase text-gray-400">{t('Owes')}</p>
                   <p className="text-2xl font-black text-sky-700 tabular-nums">{formatRupees(customer.balance)}</p>
                 </div>
                 <Link
@@ -243,14 +243,14 @@ export const SalesCredit = () => {
                   className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl border border-gray-200 text-gray-700 font-bold hover:bg-gray-50 transition-all"
                 >
                   <BookOpen size={18} />
-                  Passbook
+                  {t('Passbook')}
                 </Link>
                 <button
                   onClick={() => { setNotice(null); setPaying(customer); }}
                   className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-orange-600 text-white font-bold shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all"
                 >
                   <HandCoins size={18} />
-                  Record Payment
+                  {t('Record Payment')}
                 </button>
               </div>
             </div>
@@ -259,11 +259,11 @@ export const SalesCredit = () => {
               <table className="w-full text-left">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Bill</th>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Date</th>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">Credit Given</th>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">Still Owed</th>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Unpaid For</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Bill')}</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Date')}</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Credit Given')}</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Still Owed')}</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Unpaid For')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -272,7 +272,7 @@ export const SalesCredit = () => {
                       <td className="px-6 py-3">
                         <p className={cn('font-bold text-gray-900', line.bill_number && 'font-mono')}>{lineLabel(line)}</p>
                         {line.bill_total != null && line.bill_total > line.credit_amount && (
-                          <p className="text-xs text-gray-400">Bill {formatRupees(line.bill_total)}, rest paid at the counter</p>
+                          <p className="text-xs text-gray-400">{t('Bill {bill_total}, rest paid at the counter', { bill_total: formatRupees(line.bill_total) })}</p>
                         )}
                         {!line.bill_number && line.note && <p className="text-xs text-gray-400 line-clamp-1">{line.note}</p>}
                       </td>
@@ -281,7 +281,7 @@ export const SalesCredit = () => {
                       <td className="px-6 py-3 text-right tabular-nums font-bold text-gray-900">
                         {formatRupees(line.outstanding)}
                         {line.outstanding < line.credit_amount && (
-                          <span className="block text-xs font-normal text-gray-400">part paid</span>
+                          <span className="block text-xs font-normal text-gray-400">{t('part paid')}</span>
                         )}
                       </td>
                       <td className="px-6 py-3">
@@ -304,7 +304,7 @@ export const SalesCredit = () => {
             customer={paying}
             onClose={() => setPaying(null)}
             onSaved={(amount) => {
-              setNotice(`Received ${formatRupees(amount)} from ${paying.display_name}.`);
+              setNotice(t('Received {amount} from {customer}.', { amount: formatRupees(amount), customer: paying.display_name }));
               setPaying(null);
               load();
             }}
@@ -344,11 +344,11 @@ const CustomerPaymentModal = ({ customer, onClose, onSaved }: {
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!(value > 0)) {
-      setError('Enter the amount received.');
+      setError(t('Enter the amount received.'));
       return;
     }
     if (tooMuch) {
-      setError(`That is more than the ${formatRupees(customer.balance)} owed.`);
+      setError(t('That is more than the {balance} owed.', { balance: formatRupees(customer.balance) }));
       return;
     }
     setSaving(true);
@@ -357,7 +357,7 @@ const CustomerPaymentModal = ({ customer, onClose, onSaved }: {
       await api.recordCreditPayment(customer.id, { amount: value, note: note.trim() || undefined });
       onSaved(value);
     } catch (err: any) {
-      setError(err.message || 'Could not record the payment');
+      setError(err.message || t('Could not record the payment'));
     } finally {
       setSaving(false);
     }
@@ -374,8 +374,8 @@ const CustomerPaymentModal = ({ customer, onClose, onSaved }: {
       >
         <div className="flex items-start justify-between gap-4 px-8 pt-8 pb-4">
           <div>
-            <h3 className="font-bold text-2xl text-gray-900">Record Payment</h3>
-            <p className="text-sm text-gray-500 mt-1">{customer.display_name} · owes {formatRupees(customer.balance)}</p>
+            <h3 className="font-bold text-2xl text-gray-900">{t('Record Payment')}</h3>
+            <p className="text-sm text-gray-500 mt-1">{t('{display_name} · owes {balance}', { display_name: customer.display_name, balance: formatRupees(customer.balance) })}</p>
           </div>
           <button type="button" onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full">
             <X size={22} />
@@ -384,7 +384,7 @@ const CustomerPaymentModal = ({ customer, onClose, onSaved }: {
 
         <div className="px-8 pb-6 space-y-4 overflow-y-auto">
           <label className="space-y-2 block">
-            <span className="text-sm font-semibold text-gray-700">Amount received (₹)</span>
+            <span className="text-sm font-semibold text-gray-700">{t('Amount received (₹)')}</span>
             <input
               type="number"
               step="0.01"
@@ -400,7 +400,7 @@ const CustomerPaymentModal = ({ customer, onClose, onSaved }: {
           </label>
           <label className="space-y-2 block">
             <span className="text-sm font-semibold text-gray-700">
-              Note <span className="font-normal text-gray-400">(optional — e.g. cash, UPI ref, cheque no.)</span>
+              {t('Note')} <span className="font-normal text-gray-400">{t('(optional — e.g. cash, UPI ref, cheque no.)')}</span>
             </span>
             <input
               type="text"
@@ -412,7 +412,7 @@ const CustomerPaymentModal = ({ customer, onClose, onSaved }: {
 
           {preview.length > 0 && !tooMuch && (
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-              <p className="text-xs font-bold uppercase text-gray-500 mb-2">Pays off, oldest bill first</p>
+              <p className="text-xs font-bold uppercase text-gray-500 mb-2">{t('Pays off, oldest bill first')}</p>
               <ul className="space-y-1.5 text-sm">
                 {preview.map(({ line, amount: share, cleared }, index) => (
                   <li key={line.entry_id ?? `x${index}`} className="flex justify-between gap-3">
@@ -423,7 +423,7 @@ const CustomerPaymentModal = ({ customer, onClose, onSaved }: {
                     <span className="tabular-nums font-semibold text-gray-900 whitespace-nowrap">
                       {formatRupees(share)}{' '}
                       <span className={cleared ? 'text-emerald-600' : 'text-amber-600'}>
-                        {cleared ? '· paid in full' : `· ${formatRupees(round2(line.outstanding - share))} left`}
+                        {cleared ? t('· paid in full') : t('· {amount} left', { amount: formatRupees(round2(line.outstanding - share)) })}
                       </span>
                     </span>
                   </li>
@@ -443,7 +443,7 @@ const CustomerPaymentModal = ({ customer, onClose, onSaved }: {
             onClick={onClose}
             className="px-5 py-3 text-sm font-bold text-gray-700 bg-white border border-gray-200 rounded-2xl hover:bg-gray-50"
           >
-            Cancel
+            {t('Cancel')}
           </button>
           <button
             type="submit"
@@ -451,7 +451,7 @@ const CustomerPaymentModal = ({ customer, onClose, onSaved }: {
             className="inline-flex items-center gap-2 px-5 py-3 text-sm font-bold text-white bg-orange-600 rounded-2xl hover:bg-orange-700 disabled:opacity-60"
           >
             <HandCoins size={16} />
-            {saving ? 'Saving…' : 'Save Payment'}
+            {saving ? t('Saving…') : t('Save Payment')}
           </button>
         </div>
       </motion.form>

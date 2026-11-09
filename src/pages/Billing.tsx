@@ -31,16 +31,14 @@ import { useNoticeStore } from '../store/useNoticeStore';
 import { useAuthStore } from '../store/useAuthStore';
 import type { ApiError } from '../api';
 import { round2 } from '../lib/billMath';
-import { UNIT_OPTIONS } from '../lib/units';
 import { FORM_FIELD, FORM_LABEL, HEADER_NOTE, ROW_FIELD, TABLE_HEAD_ROW } from '../lib/entryStyles';
 import { useAnchoredMenu } from '../hooks/useAnchoredMenu';
+import { billTabName, itemLabel, paymentLabel, t, unitLabel } from '../i18n';
+import { ItemName } from '../components/ItemName';
 
 const normalizeCustomerKey = (value: string) => value.trim().toLowerCase();
 
-const money = (value: number) => `Rs. ${value.toFixed(2)}`;
-
-/** "Packet" for "packet": the unit as the Purchases screen names it. */
-const unitLabel = (metric: string) => UNIT_OPTIONS.find((unit) => unit.value === metric)?.label ?? (metric || '-');
+const money = (value: number) => t('Rs. {value}', { value: value.toFixed(2) });
 
 /** "3 @ Rs. 107.10 + 2 @ Rs. 113.40" — how a line crossing batches is charged. */
 const describeSegments = (line: CartItem) =>
@@ -325,11 +323,11 @@ export const Billing = () => {
   const handleCreateCustomer = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!newCustomerForm.shop_name?.trim() && !newCustomerForm.name?.trim()) {
-      alert('Enter the bakery / shop name, or the customer’s name if they have no shop.');
+      alert(t('Enter the bakery / shop name, or the customer’s name if they have no shop.'));
       return;
     }
     if (!newCustomerForm.phone?.trim()) {
-      alert('Customer phone is required.');
+      alert(t('Customer phone is required.'));
       return;
     }
 
@@ -352,7 +350,7 @@ export const Billing = () => {
         selectCustomer(createdCustomer);
       }
     } catch (err: any) {
-      alert(err.message || 'Failed to create customer');
+      alert(err.message || t('Failed to create customer'));
     }
   };
 
@@ -374,20 +372,20 @@ export const Billing = () => {
 
     const short = cartItems.find((line) => line.quantity > line.available);
     if (short) {
-      notice.show(`Only ${short.available} ${short.metric} of ${short.name} in stock — reduce the quantity.`, 'warning');
+      notice.show(t('Only {available} {metric} of {name} in stock — reduce the quantity.', { available: short.available, metric: unitLabel(short.metric), name: itemLabel(short.name) }), 'warning');
       return;
     }
 
     if (paymentMethod === 'split') {
       const paidTotal = paymentAmounts.cash + paymentAmounts.upi + paymentAmounts.credit;
       if (Math.abs(paidTotal - totals.total) > 0.01) {
-        alert(`Payment mismatch! Paid: Rs. ${paidTotal.toFixed(2)}, Total: Rs. ${totals.total.toFixed(2)}`);
+        alert(t('Payment mismatch! Paid: Rs. {value}, Total: Rs. {value2}', { value: paidTotal.toFixed(2), value2: totals.total.toFixed(2) }));
         return;
       }
     }
 
     if ((paymentMethod === 'credit' || (paymentMethod === 'split' && paymentAmounts.credit > 0)) && !customer) {
-      alert('Credit payment requires a customer to be selected!');
+      alert(t('Credit payment requires a customer to be selected!'));
       setShowCustomerSuggestions(true);
       return;
     }
@@ -405,20 +403,20 @@ export const Billing = () => {
     if (!item.gst_applicable || totalRate === 0) {
       return {
         label: '0%',
-        breakdown: 'No GST',
+        breakdown: t('No GST'),
       };
     }
 
     if (itemMode === 'igst') {
       return {
-        label: `IGST ${totalRate}%`,
-        breakdown: `IGST Rs. ${(item.igst_amount || 0).toFixed(2)}`,
+        label: t('IGST {totalRate}%', { totalRate }),
+        breakdown: t('IGST Rs. {value}', { value: (item.igst_amount || 0).toFixed(2) }),
       };
     }
 
     return {
-      label: `GST ${totalRate}%`,
-      breakdown: `${item.sgst_rate}% SGST + ${item.cgst_rate}% CGST`,
+      label: t('GST {totalRate}%', { totalRate }),
+      breakdown: t('{sgst}% SGST + {cgst}% CGST', { sgst: item.sgst_rate, cgst: item.cgst_rate }),
     };
   };
 
@@ -503,7 +501,7 @@ export const Billing = () => {
         await refreshCartBatches().catch(() => undefined);
         notice.show(error.message, 'warning');
       } else {
-        alert(`Sale Failed: ${error.message || 'An unknown error occurred while submitting the bill.'}`);
+        alert(t('Sale Failed: {value}', { value: error.message || t('An unknown error occurred while submitting the bill.') }));
       }
     } finally {
       setIsProcessing(false);
@@ -516,9 +514,9 @@ export const Billing = () => {
         <div className="px-6 2xl:px-8 py-5 border-b border-gray-100 bg-gradient-to-r from-orange-50 to-amber-50">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Billing Entry</h1>
+              <h1 className="text-2xl font-bold text-gray-900">{t('Billing Entry')}</h1>
               <p className="text-sm text-gray-600 mt-1">
-                Search an item and press Enter to add it. Each unit is billed at the price of the stock it comes from, oldest first.
+                {t('Search an item and press Enter to add it. Each unit is billed at the price of the stock it comes from, oldest first.')}
               </p>
             </div>
 
@@ -545,15 +543,14 @@ export const Billing = () => {
                           if (e.key === 'Escape') setEditingCartId(null);
                         }}
                         autoFocus
-                        aria-label="Bill name"
+                        aria-label={t('Bill name')}
                         className="w-28 rounded-lg bg-white px-2 py-1 text-sm font-semibold text-gray-900 outline-none"
                       />
                     ) : (
                       <button onClick={() => setActiveCart(cart.id)} className="text-left">
-                        <p className="whitespace-nowrap text-sm font-bold leading-tight">{cart.name}</p>
+                        <p className="whitespace-nowrap text-sm font-bold leading-tight">{billTabName(cart.name)}</p>
                         <p className="whitespace-nowrap text-[11px] opacity-80">
-                          {cart.items.length} items
-                          {cart.customer ? ` | ${customerDisplayName(cart.customer)}` : ''}
+                          {t('{count} items', { count: cart.items.length })}{cart.customer ? ` | ${customerDisplayName(cart.customer)}` : ''}
                         </p>
                       </button>
                     )}
@@ -561,7 +558,7 @@ export const Billing = () => {
                       <button
                         onClick={() => handleStartRename(cart.id, cart.name)}
                         className="rounded-lg p-1 opacity-80 transition-all hover:bg-white/15 hover:opacity-100"
-                        aria-label={`Rename ${cart.name}`}
+                        aria-label={t('Rename {name}', { name: billTabName(cart.name) })}
                       >
                         <Edit2 size={14} />
                       </button>
@@ -570,7 +567,7 @@ export const Billing = () => {
                       <button
                         onClick={() => closeBillingTab(cart.id)}
                         className="rounded-lg p-1 opacity-80 transition-all hover:bg-white/15 hover:opacity-100"
-                        aria-label={`Close ${cart.name}`}
+                        aria-label={t('Close {name}', { name: billTabName(cart.name) })}
                       >
                         <X size={14} />
                       </button>
@@ -583,7 +580,7 @@ export const Billing = () => {
                 className="flex items-center gap-1.5 rounded-xl border border-dashed border-orange-300 bg-white px-3 py-1.5 text-sm font-semibold text-orange-600 transition-all hover:bg-orange-50"
               >
                 <Plus size={14} />
-                New Bill
+                {t('New Bill')}
               </button>
             </div>
           </div>
@@ -593,7 +590,7 @@ export const Billing = () => {
           <div className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
               <div className="space-y-2 relative">
-                <label className={FORM_LABEL}>Customer (Bakery / Shop)</label>
+                <label className={FORM_LABEL}>{t('Customer (Bakery / Shop)')}</label>
                 <div className="relative">
                   <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                   <input
@@ -627,7 +624,7 @@ export const Billing = () => {
 
                         if (customerQuery.trim()) {
                           const shouldCreate = window.confirm(
-                            `"${customerQuery.trim()}" does not exist. Do you want to add this customer and continue?`
+                            t('"{value}" does not exist. Do you want to add this customer and continue?', { value: customerQuery.trim() })
                           );
                           if (shouldCreate) {
                             openCreateCustomerModal(customerQuery.trim());
@@ -635,7 +632,7 @@ export const Billing = () => {
                         }
                       }
                     }}
-                    placeholder="Bakery / shop, or customer name"
+                    placeholder={t('Bakery / shop, or customer name')}
                     className={cn(FORM_FIELD, 'pl-12')}
                   />
                 </div>
@@ -653,8 +650,8 @@ export const Billing = () => {
                         <p className="text-xs text-gray-500">
                           {[
                             customerContactName(customerItem),
-                            customerItem.phone || 'No phone',
-                            customerItem.gstin || 'No GSTIN',
+                            customerItem.phone || t('No phone'),
+                            customerItem.gstin || t('No GSTIN'),
                           ].filter(Boolean).join(' | ')}
                         </p>
                       </button>
@@ -667,17 +664,17 @@ export const Billing = () => {
                     onMouseDown={() => openCreateCustomerModal(customerQuery.trim())}
                     className="absolute z-20 top-full left-0 right-0 mt-1 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-left text-sm font-semibold text-orange-600 shadow-xl transition-colors hover:bg-orange-50"
                   >
-                    Add "{customerQuery.trim()}" as new customer
+                    {t('Add "{value}" as new customer', { value: customerQuery.trim() })}
                   </button>
                 )}
               </div>
 
               <label className="space-y-2">
-                <span className={FORM_LABEL}>Customer Phone</span>
+                <span className={FORM_LABEL}>{t('Customer Phone')}</span>
                 <input
                   type="text"
                   disabled={!customer}
-                  placeholder={customer ? '' : 'Select a customer first'}
+                  placeholder={customer ? '' : t('Select a customer first')}
                   value={customerForm.customer_phone}
                   onChange={(e) =>
                     setCustomerForm((current) => ({ ...current, customer_phone: e.target.value }))
@@ -687,11 +684,11 @@ export const Billing = () => {
               </label>
 
               <label className="space-y-2">
-                <span className={FORM_LABEL}>Customer GSTIN</span>
+                <span className={FORM_LABEL}>{t('Customer GSTIN')}</span>
                 <input
                   type="text"
                   disabled={!customer}
-                  placeholder={customer ? '' : 'Select a customer first'}
+                  placeholder={customer ? '' : t('Select a customer first')}
                   value={customerForm.customer_gstin}
                   onChange={(e) =>
                     setCustomerForm((current) => ({
@@ -711,7 +708,7 @@ export const Billing = () => {
                     className="flex h-[50px] w-full items-center justify-center gap-2 whitespace-nowrap rounded-2xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-500 transition-all hover:bg-red-50"
                   >
                     <X size={16} />
-                    Clear Customer
+                    {t('Clear Customer')}
                   </button>
                 ) : (
                   <button
@@ -720,18 +717,18 @@ export const Billing = () => {
                     className="flex h-[50px] w-full items-center justify-center gap-2 whitespace-nowrap rounded-2xl border border-orange-200 bg-white px-4 text-sm font-semibold text-orange-600 transition-all hover:bg-orange-50"
                   >
                     <UserPlus size={16} />
-                    Add New Customer
+                    {t('Add New Customer')}
                   </button>
                 )}
               </div>
             </div>
 
             <label className="block space-y-2">
-              <span className={FORM_LABEL}>Customer Address</span>
+              <span className={FORM_LABEL}>{t('Customer Address')}</span>
               <input
                 type="text"
                 disabled={!customer}
-                placeholder={customer ? '' : 'Select a customer first'}
+                placeholder={customer ? '' : t('Select a customer first')}
                 value={customerForm.customer_address}
                 onChange={(e) =>
                   setCustomerForm((current) => ({ ...current, customer_address: e.target.value }))
@@ -752,19 +749,19 @@ export const Billing = () => {
               )}
             >
               <span>{notice.message}</span>
-              <button type="button" onClick={notice.clear} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100">
+              <button type="button" onClick={notice.clear} aria-label={t('Dismiss')} className="shrink-0 opacity-70 hover:opacity-100">
                 <X size={16} />
               </button>
             </div>
           )}
 
           <div className="space-y-4">
-            <div className="flex items-end justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-bold text-gray-900">Bill Items</h2>
+            {/* Wraps, so a longer label (Kannada) puts the button underneath on a phone. */}
+            <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+              <div className="min-w-[12rem] flex-1">
+                <h2 className="text-lg font-bold text-gray-900">{t('Bill Items')}</h2>
                 <p className="text-sm text-gray-500">
-                  Search an item in the last row and press Enter to add it. Prices come from the purchase and can't be
-                  changed here.
+                  {t('Search an item in the last row and press Enter to add it. Prices come from the purchase and can\'t be changed here.')}
                 </p>
               </div>
               <button
@@ -774,7 +771,7 @@ export const Billing = () => {
                 className="flex h-9 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-red-200 bg-white px-3 text-sm font-semibold text-red-500 transition-all hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Trash2 size={15} />
-                Clear Bill
+                {t('Clear Bill')}
               </button>
             </div>
 
@@ -794,19 +791,19 @@ export const Billing = () => {
                 </colgroup>
                 <thead className="bg-gray-50">
                   <tr className={TABLE_HEAD_ROW}>
-                    <th className="pl-4 pr-2 py-3">Item</th>
-                    <th className="px-2 py-3">HSN</th>
-                    <th className="px-2 py-3">Metric</th>
-                    <th className="px-2 py-3 text-center">Qty</th>
+                    <th className="pl-4 pr-2 py-3">{t('Item')}</th>
+                    <th className="px-2 py-3">{t('HSN')}</th>
+                    <th className="px-2 py-3">{t('Metric')}</th>
+                    <th className="px-2 py-3 text-center">{t('Qty')}</th>
                     <th className="px-2 py-3 text-right">
-                      Unit Price<span className={HEADER_NOTE}>incl. GST</span>
+                      {t('Unit Price')}<span className={HEADER_NOTE}>{t('incl. GST')}</span>
                     </th>
-                    <th className="px-2 py-3">GST</th>
+                    <th className="px-2 py-3">{t('GST')}</th>
                     <th className="px-2 py-3 text-right">
-                      Amount<span className={HEADER_NOTE}>incl. GST</span>
+                      {t('Amount')}<span className={HEADER_NOTE}>{t('incl. GST')}</span>
                     </th>
                     <th className="px-2 py-3">
-                      <span className="sr-only">Remove</span>
+                      <span className="sr-only">{t('Remove')}</span>
                     </th>
                   </tr>
                 </thead>
@@ -819,11 +816,11 @@ export const Billing = () => {
                     return (
                       <tr key={item.id} className="align-top">
                         <td className="pl-4 pr-2 py-2.5">
-                          <div className={cn(ROW_FIELD, 'flex items-center font-semibold text-gray-900')} title={item.name}>
-                            <span className="truncate">{item.name}</span>
+                          <div className={cn(ROW_FIELD, 'flex h-auto min-h-9 items-center py-0.5 font-semibold leading-tight text-gray-900')} title={itemLabel(item.name)}>
+                            <span className="min-w-0"><ItemName name={item.name} truncate /></span>
                           </div>
                           <p className={cn('mt-1 truncate text-[11px]', short ? 'font-semibold text-red-500' : 'text-gray-400')}>
-                            {short ? `Only ${item.available} ${item.metric} in stock` : `${item.available} ${item.metric} in stock`}
+                            {short ? t('Only {available} {metric} in stock', { available: item.available, metric: unitLabel(item.metric) }) : t('{available} {metric} in stock', { available: item.available, metric: unitLabel(item.metric) })}
                           </p>
                         </td>
 
@@ -844,7 +841,7 @@ export const Billing = () => {
                             <button
                               type="button"
                               onClick={() => updateQuantity(item.id, Math.max(0, item.quantity - 1))}
-                              aria-label={`One less ${item.name}`}
+                              aria-label={t('One less {name}', { name: itemLabel(item.name) })}
                               className="rounded-lg p-1 text-gray-500 transition-all hover:bg-white"
                             >
                               <Minus size={14} />
@@ -852,7 +849,7 @@ export const Billing = () => {
                             <input
                               type="text"
                               inputMode="decimal"
-                              aria-label={`Quantity of ${item.name}`}
+                              aria-label={t('Quantity of {name}', { name: itemLabel(item.name) })}
                               value={getQuantityInputValue(item.id, item.quantity)}
                               onChange={(e) => handleQuantityInputChange(item.id, e.target.value)}
                               onBlur={() => handleQuantityInputBlur(item.id, item.quantity)}
@@ -862,7 +859,7 @@ export const Billing = () => {
                             <button
                               type="button"
                               onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                              aria-label={`One more ${item.name}`}
+                              aria-label={t('One more {name}', { name: itemLabel(item.name) })}
                               className="rounded-lg p-1 text-gray-500 transition-all hover:bg-white"
                             >
                               <Plus size={14} />
@@ -875,29 +872,29 @@ export const Billing = () => {
                         <td className="px-2 py-2.5">
                           <div
                             className={cn(ROW_FIELD, 'flex items-center justify-end whitespace-nowrap font-semibold tabular-nums text-gray-900')}
-                            title="Set on the purchase. To change it, use Items → Stock & prices."
+                            title={t('Set on the purchase. To change it, use Items → Stock & prices.')}
                           >
                             {item.unit_price.toFixed(2)}
                           </div>
                           {laterPrices.length > 0 && (
                             <p className="mt-1 truncate text-right text-[11px] font-semibold text-amber-600" title={describeSegments(item)}>
-                              then {laterPrices.join(', ')}
+                              {t('then {value}', { value: laterPrices.join(', ') })}
                             </p>
                           )}
                         </td>
 
                         <td className="px-2 py-2.5">
                           <div className={cn(ROW_FIELD, 'flex items-center text-gray-600')} title={taxDisplay.breakdown}>
-                            <span className="truncate">{taxDisplay.label === '0%' ? 'No GST' : taxDisplay.label}</span>
+                            <span className="truncate">{taxDisplay.label === '0%' ? t('No GST') : taxDisplay.label}</span>
                           </div>
                           <p className="mt-1 truncate text-[11px] text-gray-400 tabular-nums">
-                            Tax Rs. {(item.sgst_amount + item.cgst_amount + item.igst_amount).toFixed(2)}
+                            {t('Tax Rs. {value}', { value: (item.sgst_amount + item.cgst_amount + item.igst_amount).toFixed(2) })}
                           </p>
                         </td>
 
                         <td className="px-2 py-2.5 text-right tabular-nums">
                           <p className="min-h-9 py-2 leading-5 break-words font-bold text-gray-900">
-                            Rs. {item.total_amount.toFixed(2)}
+                            {t('Rs. {value}', { value: item.total_amount.toFixed(2) })}
                           </p>
                           {item.segments.length > 1 && (
                             <p className="text-[11px] break-words text-gray-400">
@@ -910,7 +907,7 @@ export const Billing = () => {
                           <button
                             type="button"
                             onClick={() => removeItem(item.id)}
-                            aria-label={`Remove ${item.name}`}
+                            aria-label={t('Remove {name}', { name: itemLabel(item.name) })}
                             className="flex h-9 w-9 items-center justify-center rounded-xl border border-red-200 bg-white text-red-500 transition-all hover:bg-red-50"
                           >
                             <Trash2 size={16} />
@@ -951,15 +948,15 @@ export const Billing = () => {
 
                             if (search.trim()) {
                               notice.show(
-                                `"${search.trim()}" is not in the catalogue. Items are added by entering a purchase.`,
+                                t('"{value}" is not in the catalogue. Items are added by entering a purchase.', { value: search.trim() }),
                                 'info'
                               );
                             }
                           }
                           if (e.key === 'Escape') setShowItemMenu(false);
                         }}
-                        placeholder="Search item or HSN"
-                        aria-label="Item search"
+                        placeholder={t('Search item or HSN')}
+                        aria-label={t('Item search')}
                         title={search}
                         className={ROW_FIELD}
                       />
@@ -981,23 +978,23 @@ export const Billing = () => {
                                   onMouseDown={() => void addToBill(item)}
                                   className="w-full px-4 py-2.5 text-left hover:bg-orange-50 transition-colors"
                                 >
-                                  <p className="font-semibold text-gray-900">{item.name}</p>
+                                  <p className="font-semibold text-gray-900"><ItemName name={item.name} /></p>
                                   <p className="text-xs text-gray-500">
-                                    HSN {item.hsn_code || 'Not set'} •{' '}
-                                    {item.stock_quantity > 0 ? `${item.stock_quantity} ${item.metric} in stock` : 'Out of stock'}
-                                    {` • selling at Rs. ${item.price.toFixed(2)}`}
+                                    {t('HSN')} {item.hsn_code || t('Not set')} •{' '}
+                                    {item.stock_quantity > 0 ? t('{stock_quantity} {metric} in stock', { stock_quantity: item.stock_quantity, metric: unitLabel(item.metric) }) : t('Out of stock')}
+                                    {t(' • selling at Rs. {value}', { value: item.price.toFixed(2) })}
                                   </p>
                                 </button>
                               ))
                             ) : (
                               <p className="px-4 py-3 text-sm text-gray-600">
-                                Not in the catalogue. Items are created when they are first purchased.{' '}
+                                {t('Not in the catalogue. Items are created when they are first purchased.')}{' '}
                                 {isAdmin ? (
                                   <Link to="/purchases" className="font-semibold text-orange-600 hover:underline">
-                                    Enter a purchase
+                                    {t('Enter a purchase')}
                                   </Link>
                                 ) : (
-                                  'Ask an admin to enter the purchase.'
+                                  t('Ask an admin to enter the purchase.')
                                 )}
                               </p>
                             )}
@@ -1031,18 +1028,18 @@ export const Billing = () => {
 
             <div className="grid gap-4 md:grid-cols-3">
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                <p className="text-xs font-bold text-gray-500 uppercase">Subtotal</p>
-                <p className="text-2xl font-black text-gray-900 mt-1">Rs. {totals.subtotal.toFixed(2)}</p>
+                <p className="text-xs font-bold text-gray-500 uppercase">{t('Subtotal')}</p>
+                <p className="text-2xl font-black text-gray-900 mt-1">{t('Rs. {value}', { value: totals.subtotal.toFixed(2) })}</p>
               </div>
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                <p className="text-xs font-bold text-gray-500 uppercase">GST Total</p>
-                <p className="text-2xl font-black text-amber-600 mt-1">Rs. {totals.tax.toFixed(2)}</p>
+                <p className="text-xs font-bold text-gray-500 uppercase">{t('GST Total')}</p>
+                <p className="text-2xl font-black text-amber-600 mt-1">{t('Rs. {value}', { value: totals.tax.toFixed(2) })}</p>
               </div>
               <div className="bg-orange-50 rounded-2xl p-4 border border-orange-100">
-                <p className="text-xs font-bold text-orange-600 uppercase">Grand Total</p>
-                <p className="text-2xl font-black text-orange-700 mt-1">Rs. {totals.total.toFixed(2)}</p>
+                <p className="text-xs font-bold text-orange-600 uppercase">{t('Grand Total')}</p>
+                <p className="text-2xl font-black text-orange-700 mt-1">{t('Rs. {value}', { value: totals.total.toFixed(2) })}</p>
                 {roundOff > 0 && (
-                  <p className="mt-1 text-xs text-gray-500">Rounded down by Rs. {roundOff.toFixed(2)}</p>
+                  <p className="mt-1 text-xs text-gray-500">{t('Rounded down by Rs. {value}', { value: roundOff.toFixed(2) })}</p>
                 )}
               </div>
             </div>
@@ -1050,13 +1047,13 @@ export const Billing = () => {
 
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-              <p className="text-xs font-bold text-gray-500 uppercase">Payment Method</p>
+              <p className="text-xs font-bold text-gray-500 uppercase">{t('Payment Method')}</p>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[
-                  { id: 'cash', icon: Banknote, label: 'Cash' },
-                  { id: 'upi', icon: Smartphone, label: 'UPI' },
-                  { id: 'credit', icon: UserPlus, label: 'Credit', disabled: !customer },
-                  { id: 'split', icon: Plus, label: 'Split' },
+                  { id: 'cash', icon: Banknote, label: t('Cash') },
+                  { id: 'upi', icon: Smartphone, label: t('UPI') },
+                  { id: 'credit', icon: UserPlus, label: t('Credit'), disabled: !customer },
+                  { id: 'split', icon: Plus, label: t('Split') },
                 ].map((method) => (
                   <button
                     key={method.id}
@@ -1074,7 +1071,7 @@ export const Billing = () => {
                     <div>
                       <p className="text-sm font-bold">{method.label}</p>
                       <p className="text-[11px] opacity-80">
-                        {method.id === 'credit' ? 'Needs customer' : 'Ready to use'}
+                        {method.id === 'credit' ? t('Needs customer') : t('Ready to use')}
                       </p>
                     </div>
                   </button>
@@ -1085,7 +1082,7 @@ export const Billing = () => {
                 <div className="mt-4 grid gap-3 md:grid-cols-3">
                   {(['cash', 'upi', 'credit'] as const).map((method) => (
                     <label key={method} className="space-y-1">
-                      <span className="text-xs font-bold uppercase text-gray-500">{method === 'upi' ? 'UPI' : method}</span>
+                      <span className="text-xs font-bold uppercase text-gray-500">{paymentLabel(method)}</span>
                       <input
                         type="number"
                         disabled={method === 'credit' && !customer}
@@ -1097,7 +1094,7 @@ export const Billing = () => {
                     </label>
                   ))}
                   <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-2.5 md:col-span-3">
-                    <span className="text-xs font-bold uppercase text-gray-500">Remaining</span>
+                    <span className="text-xs font-bold uppercase text-gray-500">{t('Remaining')}</span>
                     <span
                       className={cn(
                         'text-sm font-bold',
@@ -1106,7 +1103,7 @@ export const Billing = () => {
                           : 'text-red-500'
                       )}
                     >
-                      Rs. {(totals.total - (paymentAmounts.cash + paymentAmounts.upi + paymentAmounts.credit)).toFixed(2)}
+                      {t('Rs. {value}', { value: (totals.total - (paymentAmounts.cash + paymentAmounts.upi + paymentAmounts.credit)).toFixed(2) })}
                     </span>
                   </div>
                 </div>
@@ -1115,10 +1112,10 @@ export const Billing = () => {
 
             <div className="flex flex-col justify-between gap-4 rounded-2xl border border-orange-100 bg-orange-50 p-4">
               <div>
-                <p className="text-xs font-bold text-orange-600 uppercase">Ready To Bill</p>
-                <p className="text-2xl font-black text-orange-700 mt-1">Rs. {totals.total.toFixed(2)}</p>
+                <p className="text-xs font-bold text-orange-600 uppercase">{t('Ready To Bill')}</p>
+                <p className="text-2xl font-black text-orange-700 mt-1">{t('Rs. {value}', { value: totals.total.toFixed(2) })}</p>
                 <p className="mt-1 text-sm text-gray-600">
-                  {customer ? `Billing for ${customerDisplayName(customer)}` : 'Walk-in billing'}
+                  {customer ? t('Billing for {customer}', { customer: customerDisplayName(customer) }) : t('Walk-in billing')}
                 </p>
               </div>
 
@@ -1128,7 +1125,7 @@ export const Billing = () => {
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-orange-600 px-6 py-4 font-bold text-white shadow-lg shadow-orange-100 transition-all hover:bg-orange-700 disabled:opacity-60"
               >
                 <Printer size={18} />
-                {isProcessing ? 'Processing...' : 'Pay & Print'}
+                {isProcessing ? t('Processing...') : t('Pay & Print')}
               </button>
             </div>
           </div>
@@ -1147,9 +1144,9 @@ export const Billing = () => {
               <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-orange-100 text-orange-600">
                 <Printer size={40} />
               </div>
-              <h3 className="mb-2 text-2xl font-black text-gray-900">Confirm Sale</h3>
+              <h3 className="mb-2 text-2xl font-black text-gray-900">{t('Confirm Sale')}</h3>
               <p className="mb-8 text-gray-500">
-                Are you sure you want to complete this transaction of Rs. {totals.total.toFixed(2)}?
+                {t('Are you sure you want to complete this transaction of Rs. {value}?', { value: totals.total.toFixed(2) })}
               </p>
 
               <div className="flex flex-col gap-3">
@@ -1157,13 +1154,13 @@ export const Billing = () => {
                   onClick={processSale}
                   className="w-full rounded-2xl bg-orange-600 py-4 font-bold text-white shadow-lg shadow-orange-100 transition-all hover:bg-orange-700"
                 >
-                  Yes, Complete Sale
+                  {t('Yes, Complete Sale')}
                 </button>
                 <button
                   onClick={() => setShowConfirmModal(false)}
                   className="w-full rounded-2xl bg-gray-100 py-4 font-bold text-gray-600 transition-all hover:bg-gray-200"
                 >
-                  Cancel
+                  {t('Cancel')}
                 </button>
               </div>
             </motion.div>
@@ -1177,9 +1174,9 @@ export const Billing = () => {
             <form onSubmit={handleCreateCustomer}>
               <div className="flex items-center justify-between border-b border-gray-100 p-8">
                 <div>
-                  <h3 className="text-2xl font-bold text-gray-900">Add New Customer</h3>
+                  <h3 className="text-2xl font-bold text-gray-900">{t('Add New Customer')}</h3>
                   <p className="mt-1 text-sm text-gray-500">
-                    Customer not found. Create now and continue billing.
+                    {t('Customer not found. Create now and continue billing.')}
                   </p>
                 </div>
                 <button
@@ -1193,12 +1190,12 @@ export const Billing = () => {
 
               <div className="grid max-h-[70vh] grid-cols-2 gap-6 overflow-auto p-8">
                 <div className="col-span-2 space-y-2">
-                  <label className="text-sm font-bold text-gray-700">Bakery / Shop Name</label>
+                  <label className="text-sm font-bold text-gray-700">{t('Bakery / Shop Name')}</label>
                   <input
                     type="text"
                     value={newCustomerForm.shop_name || ''}
                     onChange={(e) => setNewCustomerForm((current) => ({ ...current, shop_name: e.target.value }))}
-                    placeholder="e.g. Sri Ganesh Bakery"
+                    placeholder={t('e.g. Sri Ganesh Bakery')}
                     className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:ring-2 focus:ring-orange-500"
                   />
                   {/* What was typed in the picker lands here. For an individual
@@ -1211,31 +1208,31 @@ export const Billing = () => {
                       }
                       className="text-xs font-semibold text-[#5a3fc0] hover:underline"
                     >
-                      No bakery or shop? Use this as the customer’s name instead
+                      {t('No bakery or shop? Use this as the customer’s name instead')}
                     </button>
                   ) : (
-                    <p className="text-xs text-gray-500">Leave blank if the customer has no bakery or shop.</p>
+                    <p className="text-xs text-gray-500">{t('Leave blank if the customer has no bakery or shop.')}</p>
                   )}
                 </div>
 
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-gray-700">
-                    Customer / Contact Name
+                    {t('Customer / Contact Name')}
                     {newCustomerForm.shop_name?.trim() ? (
-                      <span className="ml-1 font-normal text-gray-400">(optional)</span>
+                      <span className="ml-1 font-normal text-gray-400">{t('(optional)')}</span>
                     ) : null}
                   </label>
                   <input
                     type="text"
                     value={newCustomerForm.name || ''}
                     onChange={(e) => setNewCustomerForm((current) => ({ ...current, name: e.target.value }))}
-                    placeholder={newCustomerForm.shop_name?.trim() ? 'Who to ask for' : 'Required if no bakery / shop'}
+                    placeholder={newCustomerForm.shop_name?.trim() ? t('Who to ask for') : t('Required if no bakery / shop')}
                     className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-700">Phone Number</label>
+                  <label className="text-sm font-bold text-gray-700">{t('Phone Number')}</label>
                   <input
                     type="text"
                     value={newCustomerForm.phone || ''}
@@ -1246,7 +1243,7 @@ export const Billing = () => {
                 </div>
 
                 <div className="col-span-2 space-y-2">
-                  <label className="text-sm font-bold text-gray-700">Address</label>
+                  <label className="text-sm font-bold text-gray-700">{t('Address')}</label>
                   <input
                     type="text"
                     value={newCustomerForm.address || ''}
@@ -1256,7 +1253,7 @@ export const Billing = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-700">GSTIN</label>
+                  <label className="text-sm font-bold text-gray-700">{t('GSTIN')}</label>
                   <input
                     type="text"
                     value={newCustomerForm.gstin || ''}
@@ -1268,7 +1265,7 @@ export const Billing = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-700">Credit Balance (Rs.)</label>
+                  <label className="text-sm font-bold text-gray-700">{t('Credit Balance (Rs.)')}</label>
                   <input
                     type="number"
                     value={newCustomerForm.credit_balance || ''}
@@ -1289,13 +1286,13 @@ export const Billing = () => {
                   onClick={() => setShowCreateCustomerModal(false)}
                   className="flex-1 rounded-2xl border border-gray-200 bg-white py-4 font-bold text-gray-600 transition-all hover:bg-gray-100"
                 >
-                  Cancel
+                  {t('Cancel')}
                 </button>
                 <button
                   type="submit"
                   className="flex-1 rounded-2xl bg-orange-600 py-4 font-bold text-white shadow-lg shadow-orange-100 transition-all hover:bg-orange-700"
                 >
-                  Save Customer And Continue
+                  {t('Save Customer And Continue')}
                 </button>
               </div>
             </form>
@@ -1315,8 +1312,8 @@ export const Billing = () => {
               <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-green-100 text-green-600">
                 <ShoppingCart size={40} />
               </div>
-              <h3 className="mb-2 text-2xl font-black text-gray-900">Sale Successful!</h3>
-              <p className="mb-6 text-gray-500">The transaction has been completed and recorded.</p>
+              <h3 className="mb-2 text-2xl font-black text-gray-900">{t('Sale Successful!')}</h3>
+              <p className="mb-6 text-gray-500">{t('The transaction has been completed and recorded.')}</p>
 
               {settings.bill_format !== 'standard' && (
                 <div className="mb-6 max-h-[300px] overflow-auto rounded-2xl border border-gray-100 bg-gray-50 p-4">
@@ -1326,7 +1323,7 @@ export const Billing = () => {
 
               {settings.bill_format === 'standard' && (
                 <div className="mb-6 rounded-2xl border border-gray-100 bg-gray-50 p-4 text-sm text-gray-500">
-                  Invoice generated successfully. Use the print button below to open the full invoice layout.
+                  {t('Invoice generated successfully. Use the print button below to open the full invoice layout.')}
                 </div>
               )}
 
@@ -1336,13 +1333,13 @@ export const Billing = () => {
                   className="flex w-full items-center justify-center gap-2 rounded-2xl bg-orange-600 py-4 font-bold text-white shadow-lg shadow-orange-100 transition-all hover:bg-orange-700"
                 >
                   <Printer size={20} />
-                  Print Tax Invoice
+                  {t('Print Tax Invoice')}
                 </button>
                 <button
                   onClick={() => setShowSuccessModal(false)}
                   className="w-full rounded-2xl bg-gray-100 py-4 font-bold text-gray-600 transition-all hover:bg-gray-200"
                 >
-                  Done
+                  {t('Done')}
                 </button>
               </div>
             </motion.div>

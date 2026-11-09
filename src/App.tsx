@@ -22,6 +22,8 @@ import { Dashboard } from './pages/Dashboard';
 import { Settings } from './pages/Settings';
 import { QuickBill } from './pages/QuickBill';
 import { useHsnScanner } from './hooks/useHsnScanner';
+import { useItemNames } from './hooks/useItemNames';
+import { useItemNamesStore, useLanguageStore } from './i18n';
 
 const ProtectedRoute = ({ children, roles, bare }: { children: React.ReactNode; roles?: string[]; bare?: boolean }) => {
   const { user, token } = useAuthStore();
@@ -155,6 +157,16 @@ export default function App() {
   const { token } = useAuthStore();
   const { refreshItems, setSettings, setStats } = useDataStore();
   const mode = useThemeStore((state) => state.mode);
+  // Reading these here re-renders the whole screen when the language changes
+  // or Kannada item names arrive, so everything looked up with t() and
+  // itemLabel() follows; open bills and half-filled forms stay as they are.
+  const lang = useLanguageStore((state) => state.lang);
+  useItemNamesStore((state) => state.names);
+  useItemNames();
+
+  useEffect(() => {
+    document.documentElement.lang = lang;
+  }, [lang]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', mode === 'dark');

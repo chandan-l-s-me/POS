@@ -6,6 +6,7 @@ import type { CreditPurchase, SupplierCredit } from '../types';
 import { SupplierPaymentModal } from '../components/SupplierPaymentModal';
 import { ageLabel, formatDay, formatRupees } from '../lib/supplierPayments';
 import { cn, formatDateInIST, getISTTimestampForFileName } from '../lib/utils';
+import { t, tn, withEnglish } from '../i18n';
 
 /** Unpaid this long is worth a second look. */
 const AGE_WARN_DAYS = 30;
@@ -80,20 +81,19 @@ export const PurchaseCredit = () => {
   };
 
   const summary = [
-    { label: 'Total owed to suppliers', value: formatRupees(totalDue), accent: true },
-    { label: 'Suppliers owed', value: suppliers.length.toLocaleString('en-IN') },
-    { label: 'Unpaid purchases', value: purchaseCount.toLocaleString('en-IN') },
-    { label: 'Oldest unpaid', value: purchaseCount ? ageLabel(oldestDays) : '—' },
+    { label: t('Total owed to suppliers'), value: formatRupees(totalDue), accent: true },
+    { label: t('Suppliers owed'), value: suppliers.length.toLocaleString('en-IN') },
+    { label: t('Unpaid purchases'), value: purchaseCount.toLocaleString('en-IN') },
+    { label: t('Oldest unpaid'), value: purchaseCount ? ageLabel(oldestDays) : '—' },
   ];
 
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-6 2xl:px-8 py-6 border-b border-gray-100 bg-gradient-to-r from-orange-50 to-amber-50">
-          <h1 className="text-2xl font-bold text-gray-900">Purchase Credit</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('Purchase Credit')}</h1>
           <p className="text-sm text-gray-600 mt-1">
-            What the shop owes its suppliers. When the owner pays a supplier, record it here — it clears their oldest
-            invoices first. Fully paid purchases move to Payments Done.
+            {t('What the shop owes its suppliers. When the owner pays a supplier, record it here — it clears their oldest invoices first. Fully paid purchases move to Payments Done.')}
           </p>
         </div>
         <div className="grid gap-4 p-6 2xl:px-8 sm:grid-cols-2 xl:grid-cols-4">
@@ -116,17 +116,17 @@ export const PurchaseCredit = () => {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search supplier, purchase or invoice no."
+            placeholder={t('Search supplier, purchase or invoice no.')}
             className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
           />
         </div>
         <button
-          onClick={handleExport}
+          onClick={() => withEnglish(handleExport)}
           disabled={purchaseCount === 0}
           className="flex items-center gap-2 px-4 py-3 bg-white border border-gray-200 text-gray-600 font-bold rounded-2xl hover:bg-gray-50 transition-all disabled:opacity-50 disabled:pointer-events-none"
         >
           <Download size={20} />
-          Export CSV
+          {t('Export CSV')}
         </button>
       </div>
 
@@ -138,14 +138,14 @@ export const PurchaseCredit = () => {
       )}
 
       {loading ? (
-        <p className="py-12 text-center text-gray-400">Loading purchase credit…</p>
+        <p className="py-12 text-center text-gray-400">{t('Loading purchase credit…')}</p>
       ) : suppliers.length === 0 ? (
         <div className="bg-white rounded-3xl border border-gray-100 py-16 text-center">
-          <p className="text-lg font-bold text-gray-900">Nothing owed to suppliers</p>
-          <p className="text-sm text-gray-500 mt-1">Every purchase is paid. Purchases bought on credit will show up here.</p>
+          <p className="text-lg font-bold text-gray-900">{t('Nothing owed to suppliers')}</p>
+          <p className="text-sm text-gray-500 mt-1">{t('Every purchase is paid. Purchases bought on credit will show up here.')}</p>
         </div>
       ) : filtered.length === 0 ? (
-        <p className="py-12 text-center text-gray-400">No supplier matches “{search}”.</p>
+        <p className="py-12 text-center text-gray-400">{t('No supplier matches “{search}”.', { search })}</p>
       ) : (
         filtered.map((supplier) => (
           <div key={supplier.supplier_id} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
@@ -158,14 +158,14 @@ export const PurchaseCredit = () => {
                   <p className="font-bold text-lg text-gray-900 truncate">{supplier.name}</p>
                   <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-3">
                     {supplier.phone && (<span className="inline-flex items-center gap-1"><Phone size={12} />{supplier.phone}</span>)}
-                    {supplier.gstin && <span>GSTIN {supplier.gstin}</span>}
-                    <span>{supplier.purchases.length} unpaid purchase{supplier.purchases.length === 1 ? '' : 's'}</span>
+                    {supplier.gstin && <span>{t('GSTIN {gstin}', { gstin: supplier.gstin })}</span>}
+                    <span>{tn(supplier.purchases.length, '1 unpaid purchase', '{count} unpaid purchases')}</span>
                   </p>
                 </div>
               </div>
               <div className="flex items-center gap-4">
                 <div className="text-right">
-                  <p className="text-xs font-bold uppercase text-gray-400">Owed</p>
+                  <p className="text-xs font-bold uppercase text-gray-400">{t('Owed')}</p>
                   <p className="text-2xl font-black text-orange-600 tabular-nums">{formatRupees(supplier.total_due)}</p>
                 </div>
                 <button
@@ -173,7 +173,7 @@ export const PurchaseCredit = () => {
                   className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-orange-600 text-white font-bold shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all"
                 >
                   <Wallet size={18} />
-                  Record Payment
+                  {t('Record Payment')}
                 </button>
               </div>
             </div>
@@ -182,12 +182,12 @@ export const PurchaseCredit = () => {
               <table className="w-full text-left">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Purchase No.</th>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Invoice</th>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">Total</th>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">Paid</th>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">Balance Due</th>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Unpaid For</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Purchase No.')}</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Invoice')}</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Total')}</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Paid')}</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Balance Due')}</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Unpaid For')}</th>
                     <th className="px-6 py-3" />
                   </tr>
                 </thead>
@@ -196,10 +196,10 @@ export const PurchaseCredit = () => {
                     <tr key={purchase.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-6 py-3">
                         <p className="font-mono font-bold text-gray-900">{purchase.purchase_number}</p>
-                        <p className="text-xs text-gray-400">Entered {formatDateInIST(purchase.created_at)}</p>
+                        <p className="text-xs text-gray-400">{t('Entered {created_at}', { created_at: formatDateInIST(purchase.created_at) })}</p>
                       </td>
                       <td className="px-6 py-3 text-sm text-gray-600">
-                        <p>{purchase.invoice_number || 'No invoice no.'}</p>
+                        <p>{purchase.invoice_number || t('No invoice no.')}</p>
                         <p className="text-xs text-gray-400">{formatDay(purchase.invoice_date)}</p>
                       </td>
                       <td className="px-6 py-3 text-right tabular-nums text-gray-700">{formatRupees(purchase.total_amount)}</td>
@@ -217,7 +217,7 @@ export const PurchaseCredit = () => {
                           onClick={() => { setNotice(null); setPaying({ supplier, purchase }); }}
                           className="px-3 py-2 text-sm font-bold text-orange-600 border border-orange-200 rounded-xl hover:bg-orange-50 transition-all whitespace-nowrap"
                         >
-                          Pay this
+                          {t('Pay this')}
                         </button>
                       </td>
                     </tr>
@@ -237,7 +237,7 @@ export const PurchaseCredit = () => {
             purchase={paying.purchase}
             onClose={() => setPaying(null)}
             onSaved={() => {
-              setNotice(`Payment to ${paying.supplier.name} saved.`);
+              setNotice(t('Payment to {supplier} saved.', { supplier: paying.supplier.name }));
               setPaying(null);
               load();
             }}

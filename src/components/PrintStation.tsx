@@ -3,6 +3,7 @@ import { Printer } from 'lucide-react';
 import { api } from '../api';
 import { usePrint } from '../hooks/usePrint';
 import { Receipt } from './Receipt';
+import { t } from '../i18n';
 
 /**
  * The counter computer as a print station for bills saved on phones.
@@ -84,7 +85,7 @@ export const PrintStation = () => {
         }
         busy.current = false;
       } catch {
-        setError('Cannot reach the server');
+        setError(t('Cannot reach the server'));
         busy.current = false;
       }
     };
@@ -102,7 +103,7 @@ export const PrintStation = () => {
       try {
         printRef.current();
       } catch {
-        setError('Printing failed');
+        setError(t('Printing failed'));
         busy.current = false;
         setCurrent(null);
       }
@@ -115,10 +116,10 @@ export const PrintStation = () => {
     <>
       <div
         className="fixed bottom-3 right-3 z-40 flex items-center gap-2 rounded-full border border-gray-200 bg-white/95 px-3 py-1.5 text-xs font-semibold text-gray-600 shadow-sm print:hidden"
-        title="This computer prints bills saved on phones. Turn it off in Settings."
+        title={t('This computer prints bills saved on phones. Turn it off in Settings.')}
       >
         <Printer size={14} className={error ? 'text-red-500' : current ? 'text-orange-500' : 'text-emerald-600'} />
-        {error ? error : current ? `Printing ${current.billNumber}…` : `Printing phone bills${printedCount ? ` · ${printedCount} printed` : ''}`}
+        {error ? error : current ? t('Printing {billNumber}…', { billNumber: current.billNumber }) : printedCount ? t('Printing phone bills · {printedCount} printed', { printedCount }) : t('Printing phone bills')}
       </div>
       {/* Off screen, not display:none, so it lays out exactly as when shown. */}
       {current && (

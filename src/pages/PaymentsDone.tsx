@@ -4,6 +4,7 @@ import { api } from '../api';
 import type { PaidPurchase, PurchasePayment, SupplierPayment } from '../types';
 import { formatDay, formatRupees, paymentMethodLabel, paymentMethodsLabel } from '../lib/supplierPayments';
 import { cn, formatDateInIST, formatDateTimeInIST, getISTTimestampForFileName } from '../lib/utils';
+import { t, tn, withEnglish } from '../i18n';
 
 const PAGE_SIZE = 50;
 const EXPORT_CAP = 20000;
@@ -124,24 +125,25 @@ export const PaymentsDone = () => {
       if (tab === 'purchases') {
         const rows = await fetchAll<PaidPurchase>((offset) =>
           api.getPaidPurchases({ ...range, search: appliedSearch || undefined, offset }));
-        downloadCsv('payments-done', [
+        // The files read the same in either language.
+        withEnglish(() => downloadCsv('payments-done', [
           'Purchase No.', 'Supplier', 'Invoice No.', 'Invoice Date', 'Entered On', 'Total', 'Paid', 'Fully Paid On', 'Payments', 'Methods',
         ], rows.map((p) => [
           p.purchase_number, p.supplier_name, p.invoice_number, p.invoice_date, formatDateInIST(p.created_at),
           p.total_amount.toFixed(2), p.amount_paid.toFixed(2), p.paid_off_on, p.payment_count, paymentMethodsLabel(p.methods),
-        ]));
+        ])));
       } else {
         const rows = await fetchAll<SupplierPayment>((offset) => api.getSupplierPayments({ ...range, offset }));
-        downloadCsv('supplier-payments', [
+        withEnglish(() => downloadCsv('supplier-payments', [
           'Paid On', 'Supplier', 'Amount', 'Method', 'Reference', 'Purchases Settled', 'Note', 'Entered By', 'Entered At',
         ], rows.map((p) => [
           p.paid_on, p.supplier_name, p.amount.toFixed(2), paymentMethodLabel(p.method), p.reference,
           p.allocations.map((a) => `${a.purchase_number} (${a.amount.toFixed(2)})`).join('; '),
           p.note, p.user_name, formatDateTimeInIST(p.created_at),
-        ]));
+        ])));
       }
     } catch (err: any) {
-      setError(`Export failed: ${err.message}`);
+      setError(t('Export failed: {message}', { message: err.message }));
     } finally {
       setExporting(false);
     }
@@ -154,9 +156,9 @@ export const PaymentsDone = () => {
     <div className="space-y-6">
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-6 2xl:px-8 py-6 border-b border-gray-100 bg-gradient-to-r from-emerald-50 to-teal-50">
-          <h1 className="text-2xl font-bold text-gray-900">Payments Done</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('Payments Done')}</h1>
           <p className="text-sm text-gray-600 mt-1">
-            Purchases paid in full, and every payment made to suppliers — when, how much, how, and which invoices it settled.
+            {t('Purchases paid in full, and every payment made to suppliers — when, how much, how, and which invoices it settled.')}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 px-6 2xl:px-8 pt-5">
@@ -169,33 +171,33 @@ export const PaymentsDone = () => {
                 tab === value ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               )}
             >
-              {label}
+              {t(label)}
             </button>
           ))}
         </div>
         <div className="grid gap-4 p-6 2xl:px-8 md:grid-cols-[1fr_auto_auto_auto] md:items-end">
           {tab === 'purchases' ? (
             <label className="space-y-2">
-              <span className="text-sm font-semibold text-gray-700">Search</span>
+              <span className="text-sm font-semibold text-gray-700">{t('Search')}</span>
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                 <input
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Supplier, purchase or invoice no."
+                  placeholder={t('Supplier, purchase or invoice no.')}
                   className="w-full pl-11 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none"
                 />
               </div>
             </label>
           ) : <div />}
           <label className="space-y-2">
-            <span className="text-sm font-semibold text-gray-700">{tab === 'purchases' ? 'Fully paid from' : 'Paid from'}</span>
+            <span className="text-sm font-semibold text-gray-700">{tab === 'purchases' ? t('Fully paid from') : t('Paid from')}</span>
             <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
               className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none" />
           </label>
           <label className="space-y-2">
-            <span className="text-sm font-semibold text-gray-700">To</span>
+            <span className="text-sm font-semibold text-gray-700">{t('To')}</span>
             <input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)}
               className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none" />
           </label>
@@ -205,7 +207,7 @@ export const PaymentsDone = () => {
                 onClick={() => { setFrom(''); setTo(''); setSearch(''); }}
                 className="inline-flex items-center gap-1 px-4 py-3 rounded-2xl bg-gray-100 text-gray-700 font-semibold hover:bg-gray-200"
               >
-                <X size={16} /> Clear
+                <X size={16} /> {t('Clear')}
               </button>
             )}
             <button
@@ -214,7 +216,7 @@ export const PaymentsDone = () => {
               className="inline-flex items-center gap-2 px-4 py-3 bg-white border border-gray-200 text-gray-600 font-bold rounded-2xl hover:bg-gray-50 disabled:opacity-50 disabled:pointer-events-none"
             >
               <Download size={18} />
-              {exporting ? 'Exporting…' : 'Export CSV'}
+              {exporting ? t('Exporting…') : t('Export CSV')}
             </button>
           </div>
         </div>
@@ -227,11 +229,13 @@ export const PaymentsDone = () => {
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2 px-6 py-4 border-b border-gray-100">
           <p className="text-sm text-gray-500">
-            {total.toLocaleString('en-IN')} {tab === 'purchases' ? 'paid purchase' : 'payment'}{total === 1 ? '' : 's'}
-            {hasFilter ? ' matching the filter' : ''}
+            {tab === 'purchases'
+              ? tn(total, '1 paid purchase', '{count} paid purchases', { count: total.toLocaleString('en-IN') })
+              : tn(total, '1 payment', '{count} payments', { count: total.toLocaleString('en-IN') })}
+            {hasFilter ? ` ${t('matching the filter')}` : ''}
           </p>
           <p className="text-sm font-bold text-gray-900 tabular-nums">
-            {tab === 'purchases' ? 'Purchases worth ' : 'Paid out '}{formatRupees(totalAmount)}
+            {tab === 'purchases' ? t('Purchases worth {amount}', { amount: formatRupees(totalAmount) }) : t('Paid out {amount}', { amount: formatRupees(totalAmount) })}
           </p>
         </div>
 
@@ -241,19 +245,19 @@ export const PaymentsDone = () => {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 w-8" />
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Purchase No.</th>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Supplier</th>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Invoice</th>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">Total</th>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Fully Paid On</th>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Method</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Purchase No.')}</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Supplier')}</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Invoice')}</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Total')}</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Fully Paid On')}</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Method')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
-                  <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-400">Loading…</td></tr>
+                  <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-400">{t('Loading…')}</td></tr>
                 ) : purchases.length === 0 ? (
-                  <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-400">No fully paid purchases{hasFilter ? ' match this filter' : ' yet'}.</td></tr>
+                  <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-400">{hasFilter ? t('No fully paid purchases match this filter.') : t('No fully paid purchases yet.')}</td></tr>
                 ) : purchases.map((purchase) => (
                   <React.Fragment key={purchase.id}>
                     <tr className="hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => toggleHistory(purchase.id)}>
@@ -262,18 +266,18 @@ export const PaymentsDone = () => {
                       </td>
                       <td className="px-6 py-3">
                         <p className="font-mono font-bold text-gray-900">{purchase.purchase_number}</p>
-                        <p className="text-xs text-gray-400">Entered {formatDateInIST(purchase.created_at)}</p>
+                        <p className="text-xs text-gray-400">{t('Entered {created_at}', { created_at: formatDateInIST(purchase.created_at) })}</p>
                       </td>
                       <td className="px-6 py-3 font-semibold text-gray-900">{purchase.supplier_name}</td>
                       <td className="px-6 py-3 text-sm text-gray-600">
-                        <p>{purchase.invoice_number || 'No invoice no.'}</p>
+                        <p>{purchase.invoice_number || t('No invoice no.')}</p>
                         <p className="text-xs text-gray-400">{formatDay(purchase.invoice_date)}</p>
                       </td>
                       <td className="px-6 py-3 text-right tabular-nums font-bold text-gray-900">{formatRupees(purchase.total_amount)}</td>
                       <td className="px-6 py-3 text-sm text-gray-700">
                         <p>{formatDay(purchase.paid_off_on)}</p>
                         <p className="text-xs text-gray-400">
-                          {purchase.payment_count} payment{purchase.payment_count === 1 ? '' : 's'}
+                          {tn(purchase.payment_count, '1 payment', '{count} payments')}
                         </p>
                       </td>
                       <td className="px-6 py-3 text-sm text-gray-600">{paymentMethodsLabel(purchase.methods)}</td>
@@ -283,16 +287,16 @@ export const PaymentsDone = () => {
                         <td />
                         <td colSpan={6} className="px-6 py-4">
                           {!history[purchase.id] ? (
-                            <p className="text-sm text-gray-400">Loading payments…</p>
+                            <p className="text-sm text-gray-400">{t('Loading payments…')}</p>
                           ) : (
                             <table className="w-full text-sm">
                               <thead>
                                 <tr className="text-xs uppercase text-gray-400">
-                                  <th className="py-1 text-left font-bold">Paid On</th>
-                                  <th className="py-1 text-right font-bold">Towards this purchase</th>
-                                  <th className="py-1 pl-6 text-left font-bold">Method</th>
-                                  <th className="py-1 text-left font-bold">Reference / Note</th>
-                                  <th className="py-1 text-left font-bold">Entered By</th>
+                                  <th className="py-1 text-left font-bold">{t('Paid On')}</th>
+                                  <th className="py-1 text-right font-bold">{t('Towards this purchase')}</th>
+                                  <th className="py-1 pl-6 text-left font-bold">{t('Method')}</th>
+                                  <th className="py-1 text-left font-bold">{t('Reference / Note')}</th>
+                                  <th className="py-1 text-left font-bold">{t('Entered By')}</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -303,7 +307,7 @@ export const PaymentsDone = () => {
                                       {formatRupees(payment.amount)}
                                       {payment.payment_amount > payment.amount && (
                                         <span className="block text-xs font-normal text-gray-400">
-                                          of a {formatRupees(payment.payment_amount)} payment
+                                          {t('of a {payment_amount} payment', { payment_amount: formatRupees(payment.payment_amount) })}
                                         </span>
                                       )}
                                     </td>
@@ -326,20 +330,20 @@ export const PaymentsDone = () => {
             <table className="w-full text-left">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Paid On</th>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Supplier</th>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">Amount</th>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Method</th>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Purchases Settled</th>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">Entered By</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Paid On')}</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Supplier')}</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Amount')}</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Method')}</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Purchases Settled')}</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Entered By')}</th>
                   <th className="px-6 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
-                  <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-400">Loading…</td></tr>
+                  <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-400">{t('Loading…')}</td></tr>
                 ) : payments.length === 0 ? (
-                  <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-400">No payments{hasFilter ? ' in this period' : ' recorded yet'}.</td></tr>
+                  <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-400">{hasFilter ? t('No payments in this period.') : t('No payments recorded yet.')}</td></tr>
                 ) : payments.map((payment) => (
                   <tr key={payment.id} className="align-top hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-3 text-sm text-gray-700 whitespace-nowrap">{formatDay(payment.paid_on)}</td>
@@ -350,7 +354,7 @@ export const PaymentsDone = () => {
                     <td className="px-6 py-3 text-right tabular-nums font-bold text-gray-900">{formatRupees(payment.amount)}</td>
                     <td className="px-6 py-3 text-sm text-gray-600">
                       <p>{paymentMethodLabel(payment.method)}</p>
-                      {payment.reference && <p className="text-xs text-gray-400">Ref {payment.reference}</p>}
+                      {payment.reference && <p className="text-xs text-gray-400">{t('Ref {reference}', { reference: payment.reference })}</p>}
                     </td>
                     <td className="px-6 py-3 text-sm text-gray-600">
                       {payment.allocations.map((allocation) => (
@@ -372,19 +376,19 @@ export const PaymentsDone = () => {
                             disabled={removing}
                             className="px-3 py-2 text-xs font-bold text-white bg-red-600 rounded-xl hover:bg-red-700 disabled:opacity-50"
                           >
-                            {removing ? 'Removing…' : 'Remove payment'}
+                            {removing ? t('Removing…') : t('Remove payment')}
                           </button>
                           <button
                             onClick={() => setConfirmRemove(null)}
                             className="px-3 py-2 text-xs font-bold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50"
                           >
-                            Keep
+                            {t('Keep')}
                           </button>
                         </span>
                       ) : (
                         <button
                           onClick={() => setConfirmRemove(payment.id)}
-                          title="Entered by mistake? Remove it — the purchases it paid will be owed again."
+                          title={t('Entered by mistake? Remove it — the purchases it paid will be owed again.')}
                           className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
                         >
                           <Trash2 size={16} />
@@ -400,7 +404,7 @@ export const PaymentsDone = () => {
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-6 py-4">
           <p className="text-sm text-gray-500">
-            {total === 0 ? '' : `Showing ${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)} of ${total.toLocaleString('en-IN')}`}
+            {total === 0 ? '' : t('Showing {value}–{value2} of {value3}', { value: page * PAGE_SIZE + 1, value2: Math.min((page + 1) * PAGE_SIZE, total), value3: total.toLocaleString('en-IN') })}
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -408,15 +412,15 @@ export const PaymentsDone = () => {
               disabled={page === 0 || loading}
               className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
             >
-              Previous
+              {t('Previous')}
             </button>
-            <span className="px-2 text-sm font-semibold text-gray-500">Page {page + 1} of {pageCount}</span>
+            <span className="px-2 text-sm font-semibold text-gray-500">{t('Page {value} of {pageCount}', { value: page + 1, pageCount })}</span>
             <button
               onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
               disabled={page >= pageCount - 1 || loading}
               className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
             >
-              Next
+              {t('Next')}
             </button>
           </div>
         </div>

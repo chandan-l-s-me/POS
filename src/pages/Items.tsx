@@ -4,6 +4,7 @@ import { useAuthStore } from '../store/useAuthStore';
 import { useDataStore } from '../store/useDataStore';
 import { StockPanel } from '../components/StockPanel';
 import { UNIT_OPTIONS } from '../lib/units';
+import { GST_SLABS } from '../lib/billMath';
 import { api } from '../api';
 import { 
   Search, 
@@ -19,9 +20,10 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { Item } from '../types';
 import { cn } from '../lib/utils';
+import { itemLabel, t, unitLabel, useItemNamesStore } from '../i18n';
+import { ItemName } from '../components/ItemName';
 
 export const Items = () => {
-  const GST_OPTIONS = [0, 5, 12, 18, 28];
   const { user } = useAuthStore();
   // This screen keeps its own rows rather than writing into the shared
   // catalogue cache. It loads one 48-row page at a time, and pushing that page
@@ -56,12 +58,14 @@ export const Items = () => {
   const reload = useCallback(() => {
     return api.getItemsPage({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, withImages: 1, search: appliedSearch || undefined })
       .then((res) => { setRows(res?.data ?? []); setTotal(res?.total ?? 0); setLoadError(''); })
-      .catch((err: any) => setLoadError(err?.message || 'Could not load items.'));
+      .catch((err: any) => setLoadError(err?.message || t('Could not load items.')));
   }, [page, appliedSearch]);
 
   useEffect(() => { reload(); }, [reload]);
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // Whether the Kannada name was typed in this form, rather than left to translation.
+  const [kannadaTouched, setKannadaTouched] = useState(false);
   const [formData, setFormData] = useState<Partial<Item>>({
     name: '',
     hsn_code: '',
@@ -82,6 +86,7 @@ export const Items = () => {
   const filteredItems = rows;
 
   const handleOpenModal = (item?: Item) => {
+    setKannadaTouched(false);
     if (item) {
       setEditingItem(item);
       setFormData({
@@ -112,6 +117,10 @@ export const Items = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // The Kannada name as typed; blank (or a renamed item) means translate it
+    // again; untouched, the server keeps what it has.
+    const renamed = editingItem != null && formData.name !== editingItem.name;
+    const nameKn = kannadaTouched ? (formData.name_kn ?? '').trim() : renamed ? '' : undefined;
     const gstMode = formData.gst_mode || 'split';
     const gstRate = Number(formData.gst_rate || 0);
     // Catalogue details only. Price and stock live in batches: they change
@@ -128,11 +137,17 @@ export const Items = () => {
       sgst_rate: formData.gst_applicable ? (gstMode === 'split' ? gstRate / 2 : 0) : 0,
       cgst_rate: formData.gst_applicable ? (gstMode === 'split' ? gstRate / 2 : 0) : 0,
       igst_rate: formData.gst_applicable ? (gstMode === 'igst' ? gstRate : 0) : 0,
+      name_kn: nameKn,
     };
     try {
       if (!editingItem) return;
       await api.updateItem(editingItem.id, normalizedForm);
       setShowModal(false);
+      // Show a typed Kannada name at once, rather than at the next refresh.
+      if (nameKn && formData.name) {
+        const { names, setNames } = useItemNamesStore.getState();
+        setNames({ ...names, [formData.name]: nameKn });
+      }
       // Re-read rather than splicing the form values into the list: the server
       // normalises and bounds what it stores, so the row on screen should be
       // what it actually holds.
@@ -143,7 +158,7 @@ export const Items = () => {
   };
 
   const handleDelete = async (id: number) => {
-    if (window.confirm('Are you sure you want to delete this item?')) {
+    if (window.confirm(t('Are you sure you want to delete this item?'))) {
       try {
         await api.deleteItem(id);
         await reload();
@@ -162,7 +177,7 @@ export const Items = () => {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search items by name or HSN..."
+            placeholder={t('Search items by name or HSN...')}
             className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
           />
         </div>
@@ -172,10 +187,10 @@ export const Items = () => {
           <Link
             to="/purchases"
             className="flex items-center gap-2 px-6 py-3 bg-orange-600 text-white font-bold rounded-2xl shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all"
-            title="New items are added with their first purchase"
+            title={t('New items are added with their first purchase')}
           >
             <Truck size={20} />
-            Add items via Purchases
+            {t('Add items via Purchases')}
           </Link>
         )}
       </div>
@@ -193,16 +208,16 @@ export const Items = () => {
                   onClick={() => reload()}
                   className="px-4 py-2 rounded-xl bg-gray-100 font-semibold text-gray-600 hover:bg-gray-200 transition-all"
                 >
-                  Retry
+                  {t('Retry')}
                 </button>
               </>
             ) : (
               <>
-                <p className="font-medium">No items found</p>
+                <p className="font-medium">{t('No items found')}</p>
                 {search ? (
-                  <p className="text-sm">Try searching for something else</p>
+                  <p className="text-sm">{t('Try searching for something else')}</p>
                 ) : (
-                  <p className="text-sm">Items appear here once they are purchased</p>
+                  <p className="text-sm">{t('Items appear here once they are purchased')}</p>
                 )}
               </>
             )}
@@ -217,7 +232,7 @@ export const Items = () => {
             <div className="flex justify-between items-start mb-4">
               <div className="w-16 h-16 bg-gray-50 rounded-2xl flex items-center justify-center text-gray-400 overflow-hidden">
                 {item.image_url ? (
-                  <img src={item.image_url} alt={item.name} className="w-full h-full object-cover" />
+                  <img src={item.image_url} alt={itemLabel(item.name)} className="w-full h-full object-cover" />
                 ) : (
                   <Package size={32} />
                 )}
@@ -226,16 +241,16 @@ export const Items = () => {
                 <div className="flex gap-1">
                   <button 
                     onClick={() => handleOpenModal(item)}
-                    aria-label={`Edit ${item.name}`}
-                    title="Edit"
+                    aria-label={t('Edit {name}', { name: itemLabel(item.name) })}
+                    title={t('Edit')}
                     className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-all"
                   >
                     <Edit2 size={18} />
                   </button>
                   <button 
                     onClick={() => handleDelete(item.id)}
-                    aria-label={`Delete ${item.name}`}
-                    title="Delete"
+                    aria-label={t('Delete {name}', { name: itemLabel(item.name) })}
+                    title={t('Delete')}
                     className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
                   >
                     <Trash2 size={18} />
@@ -244,24 +259,24 @@ export const Items = () => {
               )}
             </div>
 
-            <h4 className="font-bold text-gray-900 mb-1 break-words">{item.name}</h4>
-            <p className="text-xs text-gray-400 mb-4 font-mono">HSN: {item.hsn_code || 'NOT SET'}</p>
+            <h4 className="font-bold text-gray-900 mb-1 break-words"><ItemName name={item.name} /></h4>
+            <p className="text-xs text-gray-400 mb-4 font-mono">{t('HSN:')} {item.hsn_code || t('NOT SET')}</p>
 
             <div className="flex items-center justify-between pt-4 border-t border-gray-50">
               <div>
                 {/* The price the next unit sells at: the oldest batch's. */}
-                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">Selling Price</p>
+                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">{t('Selling Price')}</p>
                 <p className="text-lg font-black text-orange-600">
                   {item.price > 0 ? `₹${item.price.toFixed(2)}` : '—'}
                 </p>
               </div>
               <div className="text-right">
-                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">Stock</p>
+                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">{t('Stock')}</p>
                 <p className={cn(
                   "text-lg font-black",
                   item.stock_quantity < 10 ? "text-red-500" : "text-gray-900"
                 )}>
-                  {item.stock_quantity} <span className="text-xs font-normal text-gray-400">{item.metric}</span>
+                  {item.stock_quantity} <span className="text-xs font-normal text-gray-400">{unitLabel(item.metric)}</span>
                 </p>
               </div>
             </div>
@@ -269,7 +284,7 @@ export const Items = () => {
             {item.stock_quantity < 10 && (
               <div className="mt-4 flex items-center gap-2 text-xs font-bold text-red-500 bg-red-50 px-3 py-2 rounded-xl">
                 <AlertCircle size={14} />
-                {item.stock_quantity <= 0 ? 'OUT OF STOCK' : 'LOW STOCK ALERT'}
+                {item.stock_quantity <= 0 ? t('OUT OF STOCK') : t('LOW STOCK ALERT')}
               </div>
             )}
 
@@ -278,7 +293,7 @@ export const Items = () => {
               className="mt-4 w-full flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:bg-gray-100"
             >
               <Layers size={14} />
-              Stock &amp; prices
+              {t('Stock & prices')}
             </button>
           </motion.div>
         )))}
@@ -289,7 +304,7 @@ export const Items = () => {
       {total > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-100 bg-white px-6 py-4">
           <p className="text-sm text-gray-500">
-            Showing {page * PAGE_SIZE + 1}&ndash;{Math.min((page + 1) * PAGE_SIZE, total)} of {total.toLocaleString('en-IN')}
+            {t('Showing {value}–{value2} of {value3}', { value: page * PAGE_SIZE + 1, value2: Math.min((page + 1) * PAGE_SIZE, total), value3: total.toLocaleString('en-IN') })}
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -297,17 +312,17 @@ export const Items = () => {
               disabled={page === 0}
               className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
             >
-              Previous
+              {t('Previous')}
             </button>
             <span className="px-2 text-sm font-semibold text-gray-500">
-              Page {page + 1} of {pageCount.toLocaleString('en-IN')}
+              {t('Page {value} of {value2}', { value: page + 1, value2: pageCount.toLocaleString('en-IN') })}
             </span>
             <button
               onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
               disabled={page >= pageCount - 1}
               className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
             >
-              Next
+              {t('Next')}
             </button>
           </div>
         </div>
@@ -325,7 +340,7 @@ export const Items = () => {
             >
               <form onSubmit={handleSubmit}>
                 <div className="p-8 border-b border-gray-100 flex items-center justify-between">
-                  <h3 className="font-bold text-2xl">Edit Item</h3>
+                  <h3 className="font-bold text-2xl">{t('Edit Item')}</h3>
                   <button type="button" onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-100 rounded-full">
                     <X size={24} />
                   </button>
@@ -333,18 +348,38 @@ export const Items = () => {
 
                 <div className="p-8 grid grid-cols-2 gap-6 max-h-[70vh] overflow-auto">
                   <div className="space-y-2 col-span-2">
-                    <label className="text-sm font-bold text-gray-700">Item Name</label>
+                    <label className="text-sm font-bold text-gray-700">{t('Item Name')}</label>
                     <input
                       type="text"
                       value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        // A new English name gets a new translation, unless one was typed.
+                        const name_kn = kannadaTouched ? formData.name_kn : name === editingItem?.name ? editingItem?.name_kn : '';
+                        setFormData({ ...formData, name, name_kn });
+                      }}
                       className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                       required
                     />
                   </div>
 
+                  <div className="space-y-2 col-span-2">
+                    <label htmlFor="item-name-kn" className="text-sm font-bold text-gray-700">{t('Name in Kannada')}</label>
+                    <input
+                      id="item-name-kn"
+                      type="text"
+                      lang="kn"
+                      value={formData.name_kn ?? ''}
+                      onChange={(e) => { setKannadaTouched(true); setFormData({ ...formData, name_kn: e.target.value }); }}
+                      placeholder={t('Translated automatically from the English name')}
+                      maxLength={200}
+                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                    />
+                    <p className="text-xs text-gray-500">{t('Shown when the app is in Kannada. Correct it here if the translation is wrong; leave it empty to translate again.')}</p>
+                  </div>
+
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">HSN Code</label>
+                    <label className="text-sm font-bold text-gray-700">{t('HSN Code')}</label>
                     <input
                       type="text"
                       value={formData.hsn_code}
@@ -355,25 +390,25 @@ export const Items = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">Selling Price &amp; Stock</label>
+                    <label className="text-sm font-bold text-gray-700">{t('Selling Price & Stock')}</label>
                     <p className="px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm text-gray-600">
-                      {editingItem && editingItem.price > 0 ? `₹${editingItem.price.toFixed(2)}` : 'No price yet'} ·{' '}
-                      {editingItem?.stock_quantity ?? 0} {editingItem?.metric} in stock
+                      {editingItem && editingItem.price > 0 ? `₹${editingItem.price.toFixed(2)}` : t('No price yet')} ·{' '}
+                      {t('{value} {metric} in stock', { value: editingItem?.stock_quantity ?? 0, metric: editingItem?.metric })}
                       <span className="block text-xs text-gray-400 mt-1">
-                        Set on purchases. Change them under Stock &amp; prices.
+                        {t('Set on purchases. Change them under Stock & prices.')}
                       </span>
                     </p>
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">Metric</label>
+                    <label className="text-sm font-bold text-gray-700">{t('Metric')}</label>
                     <select
                       value={formData.metric}
                       onChange={(e) => setFormData({ ...formData, metric: e.target.value })}
                       className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                     >
                       {UNIT_OPTIONS.map((unit) => (
-                        <option key={unit.value} value={unit.value}>{unit.label}</option>
+                        <option key={unit.value} value={unit.value}>{t(unit.label)}</option>
                       ))}
                       {/* An older item may use a unit no longer offered. */}
                       {formData.metric && !UNIT_OPTIONS.some((unit) => unit.value === formData.metric) && (
@@ -383,32 +418,32 @@ export const Items = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">GST Type</label>
+                    <label className="text-sm font-bold text-gray-700">{t('GST Type')}</label>
                     <select
                       value={formData.gst_mode || 'split'}
                       onChange={(e) => setFormData({ ...formData, gst_mode: e.target.value as 'split' | 'igst' })}
                       className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                     >
-                      <option value="split">CGST + SGST</option>
-                      <option value="igst">IGST</option>
+                      <option value="split">{t('CGST + SGST')}</option>
+                      <option value="igst">{t('IGST')}</option>
                     </select>
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">GST Slab (%)</label>
+                    <label className="text-sm font-bold text-gray-700">{t('GST Slab (%)')}</label>
                     <select
                       value={formData.gst_rate ?? 12}
                       onChange={(e) => setFormData({ ...formData, gst_rate: Number(e.target.value) })}
                       className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                     >
-                      {GST_OPTIONS.map((rate) => (
+                      {GST_SLABS.map((rate) => (
                         <option key={rate} value={rate}>{rate}%</option>
                       ))}
                     </select>
                     <p className="text-xs text-gray-500">
                       {(formData.gst_mode || 'split') === 'split'
-                        ? `${Number(formData.gst_rate || 0) / 2}% SGST + ${Number(formData.gst_rate || 0) / 2}% CGST`
-                        : `${Number(formData.gst_rate || 0)}% IGST`}
+                        ? t('{value}% SGST + {value2}% CGST', { value: Number(formData.gst_rate || 0) / 2, value2: Number(formData.gst_rate || 0) / 2 })
+                        : t('{number}% IGST', { number: Number(formData.gst_rate || 0) })}
                     </p>
                   </div>
 
@@ -420,7 +455,7 @@ export const Items = () => {
                         onChange={(e) => setFormData({ ...formData, is_loose: e.target.checked })}
                         className="w-5 h-5 accent-orange-600"
                       />
-                      <span className="text-sm font-bold text-gray-700">Loose Item (Weight based)</span>
+                      <span className="text-sm font-bold text-gray-700">{t('Loose Item (Weight based)')}</span>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
@@ -429,7 +464,7 @@ export const Items = () => {
                         onChange={(e) => setFormData({ ...formData, gst_applicable: e.target.checked })}
                         className="w-5 h-5 accent-orange-600"
                       />
-                      <span className="text-sm font-bold text-gray-700">GST Applicable</span>
+                      <span className="text-sm font-bold text-gray-700">{t('GST Applicable')}</span>
                     </label>
                   </div>
                 </div>
@@ -440,14 +475,14 @@ export const Items = () => {
                     onClick={() => setShowModal(false)}
                     className="flex-1 py-4 bg-white border border-gray-200 text-gray-600 font-bold rounded-2xl hover:bg-gray-100 transition-all"
                   >
-                    Cancel
+                    {t('Cancel')}
                   </button>
                   <button
                     type="submit"
                     className="flex-1 py-4 bg-orange-600 text-white font-bold rounded-2xl shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all flex items-center justify-center gap-2"
                   >
                     <Save size={20} />
-                    Update Item
+                    {t('Update Item')}
                   </button>
                 </div>
               </form>

@@ -16,6 +16,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Customer } from '../types';
 import { cn } from '../lib/utils';
 import { customerContactName, customerDisplayName, customerInitial } from '../lib/customer';
+import { t } from '../i18n';
 
 export const Customers = () => {
   // Local rows, for the same reason as the Items screen: this page loads one
@@ -50,7 +51,7 @@ export const Customers = () => {
   const reload = useCallback(() => {
     return api.getCustomersPage({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, search: appliedSearch || undefined })
       .then((res) => { setRows(res?.data ?? []); setTotal(res?.total ?? 0); setLoadError(''); })
-      .catch((err: any) => setLoadError(err?.message || 'Could not load customers.'));
+      .catch((err: any) => setLoadError(err?.message || t('Could not load customers.')));
   }, [page, appliedSearch]);
 
   useEffect(() => { reload(); }, [reload]);
@@ -81,7 +82,7 @@ export const Customers = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.shop_name?.trim() && !formData.name?.trim()) {
-      alert('Enter the bakery / shop name, or the customer’s name if they have no shop.');
+      alert(t('Enter the bakery / shop name, or the customer’s name if they have no shop.'));
       return;
     }
     try {
@@ -109,7 +110,7 @@ export const Customers = () => {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by bakery / shop, name or phone..."
+            placeholder={t('Search by bakery / shop, name or phone...')}
             className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
           />
         </div>
@@ -118,7 +119,7 @@ export const Customers = () => {
           className="flex items-center gap-2 px-6 py-3 bg-orange-600 text-white font-bold rounded-2xl shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all"
         >
           <Plus size={20} />
-          Add New Customer
+          {t('Add New Customer')}
         </button>
       </div>
 
@@ -129,7 +130,7 @@ export const Customers = () => {
             onClick={() => reload()}
             className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-100"
           >
-            Retry
+            {t('Retry')}
           </button>
         </div>
       )}
@@ -137,8 +138,8 @@ export const Customers = () => {
       {!loadError && filteredCustomers.length === 0 && (
         <div className="flex flex-col items-center justify-center gap-3 py-20 text-gray-400">
           <User size={40} />
-          <p className="font-medium">No customers found</p>
-          <p className="text-sm">{search ? 'Try searching for something else' : 'Customers will appear here once added'}</p>
+          <p className="font-medium">{t('No customers found')}</p>
+          <p className="text-sm">{search ? t('Try searching for something else') : t('Customers will appear here once added')}</p>
         </div>
       )}
 
@@ -155,8 +156,8 @@ export const Customers = () => {
               </div>
               <button 
                 onClick={() => handleOpenModal(customer)}
-                aria-label={`Edit ${customer.shop_name || customer.name}`}
-                title="Edit"
+                aria-label={t('Edit {value}', { value: customer.shop_name || customer.name })}
+                title={t('Edit')}
                 className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-all"
               >
                 <Edit2 size={18} />
@@ -191,7 +192,7 @@ export const Customers = () => {
               )}
               {customer.gstin && (
                 <div className="flex items-center gap-3 text-gray-500 text-sm">
-                  <span className="font-bold text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">GST</span>
+                  <span className="font-bold text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">{t('GST')}</span>
                   <span>{customer.gstin}</span>
                 </div>
               )}
@@ -199,7 +200,7 @@ export const Customers = () => {
 
             <div className="pt-6 border-t border-gray-50 flex items-center justify-between">
               <div>
-                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">Credit Balance</p>
+                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">{t('Credit Balance')}</p>
                 <p className={cn(
                   "text-lg font-black",
                   customer.credit_balance > 0 ? "text-red-500" : "text-green-500"
@@ -210,10 +211,10 @@ export const Customers = () => {
               <Link
                 to={`/customers/${customer.id}`}
                 className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition-all hover:bg-gray-100"
-                title="Every bill, payment and balance change for this customer"
+                title={t('Every bill, payment and balance change for this customer')}
               >
                 <BookOpen size={16} />
-                Passbook
+                {t('Passbook')}
               </Link>
             </div>
           </motion.div>
@@ -225,7 +226,7 @@ export const Customers = () => {
       {total > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-100 bg-white px-6 py-4">
           <p className="text-sm text-gray-500">
-            Showing {page * PAGE_SIZE + 1}&ndash;{Math.min((page + 1) * PAGE_SIZE, total)} of {total.toLocaleString('en-IN')}
+            {t('Showing {value}–{value2} of {value3}', { value: page * PAGE_SIZE + 1, value2: Math.min((page + 1) * PAGE_SIZE, total), value3: total.toLocaleString('en-IN') })}
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -233,17 +234,17 @@ export const Customers = () => {
               disabled={page === 0}
               className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
             >
-              Previous
+              {t('Previous')}
             </button>
             <span className="px-2 text-sm font-semibold text-gray-500">
-              Page {page + 1} of {pageCount.toLocaleString('en-IN')}
+              {t('Page {value} of {value2}', { value: page + 1, value2: pageCount.toLocaleString('en-IN') })}
             </span>
             <button
               onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
               disabled={page >= pageCount - 1}
               className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition-all hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
             >
-              Next
+              {t('Next')}
             </button>
           </div>
         </div>
@@ -261,7 +262,7 @@ export const Customers = () => {
             >
               <form onSubmit={handleSubmit}>
                 <div className="p-8 border-b border-gray-100 flex items-center justify-between">
-                  <h3 className="font-bold text-2xl">{editingCustomer ? 'Edit Customer' : 'Add New Customer'}</h3>
+                  <h3 className="font-bold text-2xl">{editingCustomer ? t('Edit Customer') : t('Add New Customer')}</h3>
                   <button type="button" onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-100 rounded-full">
                     <X size={24} />
                   </button>
@@ -269,35 +270,35 @@ export const Customers = () => {
 
                 <div className="p-8 space-y-6">
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">Bakery / Shop Name</label>
+                    <label className="text-sm font-bold text-gray-700">{t('Bakery / Shop Name')}</label>
                     <input
                       type="text"
                       value={formData.shop_name || ''}
                       onChange={(e) => setFormData({ ...formData, shop_name: e.target.value })}
-                      placeholder="e.g. Sri Ganesh Bakery"
+                      placeholder={t('e.g. Sri Ganesh Bakery')}
                       className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                     />
-                    <p className="text-xs text-gray-500">Leave blank if the customer has no bakery or shop.</p>
+                    <p className="text-xs text-gray-500">{t('Leave blank if the customer has no bakery or shop.')}</p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-6">
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-gray-700">
-                        Customer / Contact Name
+                        {t('Customer / Contact Name')}
                         {formData.shop_name?.trim() ? (
-                          <span className="ml-1 font-normal text-gray-400">(optional)</span>
+                          <span className="ml-1 font-normal text-gray-400">{t('(optional)')}</span>
                         ) : null}
                       </label>
                       <input
                         type="text"
                         value={formData.name || ''}
                         onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                        placeholder={formData.shop_name?.trim() ? 'Who to ask for' : 'Required if no bakery / shop'}
+                        placeholder={formData.shop_name?.trim() ? t('Who to ask for') : t('Required if no bakery / shop')}
                         className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm font-bold text-gray-700">Phone Number</label>
+                      <label className="text-sm font-bold text-gray-700">{t('Phone Number')}</label>
                       <input
                         type="tel"
                         value={formData.phone}
@@ -309,7 +310,7 @@ export const Customers = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">Address</label>
+                    <label className="text-sm font-bold text-gray-700">{t('Address')}</label>
                     <textarea
                       value={formData.address}
                       onChange={(e) => setFormData({ ...formData, address: e.target.value })}
@@ -319,7 +320,7 @@ export const Customers = () => {
 
                   <div className="grid grid-cols-2 gap-6">
                     <div className="space-y-2">
-                      <label className="text-sm font-bold text-gray-700">GSTIN</label>
+                      <label className="text-sm font-bold text-gray-700">{t('GSTIN')}</label>
                       <input
                         type="text"
                         value={formData.gstin}
@@ -328,7 +329,7 @@ export const Customers = () => {
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm font-bold text-gray-700">Credit Balance (₹)</label>
+                      <label className="text-sm font-bold text-gray-700">{t('Credit Balance (₹)')}</label>
                       <input
                         type="number"
                         value={formData.credit_balance || ''}
@@ -346,14 +347,14 @@ export const Customers = () => {
                     onClick={() => setShowModal(false)}
                     className="flex-1 py-4 bg-white border border-gray-200 text-gray-600 font-bold rounded-2xl hover:bg-gray-100 transition-all"
                   >
-                    Cancel
+                    {t('Cancel')}
                   </button>
                   <button
                     type="submit"
                     className="flex-1 py-4 bg-orange-600 text-white font-bold rounded-2xl shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all flex items-center justify-center gap-2"
                   >
                     <Save size={20} />
-                    {editingCustomer ? 'Update Customer' : 'Save Customer'}
+                    {editingCustomer ? t('Update Customer') : t('Save Customer')}
                   </button>
                 </div>
               </form>

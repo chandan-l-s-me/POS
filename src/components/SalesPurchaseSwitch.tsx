@@ -2,12 +2,13 @@ import { useSearchParams } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { ShoppingCart, Truck } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { t } from '../i18n';
 
 export type TradeView = 'sales' | 'purchases';
 
 const OPTIONS = [
-  { id: 'sales', label: 'Sales', icon: ShoppingCart },
-  { id: 'purchases', label: 'Purchases', icon: Truck },
+  { id: 'sales', get label() { return t('Sales'); }, icon: ShoppingCart },
+  { id: 'purchases', get label() { return t('Purchases'); }, icon: Truck },
 ] as const;
 
 /**
@@ -35,7 +36,7 @@ export const SalesPurchaseSwitch = ({ value, onChange, id }: {
   /** Keeps this switch's sliding animation apart from any other on screen. */
   id: string;
 }) => (
-  <div role="tablist" aria-label="Sales or purchases" className="inline-grid grid-cols-2 gap-1 rounded-2xl border border-gray-200 bg-white p-1 shadow-sm">
+  <div role="tablist" aria-label={t('Sales or purchases')} className="inline-grid grid-cols-2 gap-1 rounded-2xl border border-gray-200 bg-white p-1 shadow-sm">
     {OPTIONS.map(({ id: optionId, label, icon: Icon }) => {
       const selected = value === optionId;
       return (

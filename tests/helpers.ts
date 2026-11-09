@@ -70,6 +70,9 @@ export async function startServer(env: Record<string, string> = {}): Promise<Tes
         // shop's backups/; automatic ones are off unless a test turns them on.
         BACKUP_DIR: path.join(dir, 'backups'),
         AUTO_BACKUP_HOURS: '0',
+        // Kannada item names come from Google Translate; never from a test,
+        // unless it points TRANSLATE_API_BASE at a stand-in and turns this on.
+        TRANSLATE_ITEM_NAMES: 'off',
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],

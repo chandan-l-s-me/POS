@@ -8,6 +8,30 @@ $Script:PackageRoot = Split-Path -Parent $PSScriptRoot
 $Script:DefaultInstallDir = Join-Path $env:ProgramFiles 'VyaparaBilling'
 $Script:UninstallKeyRoot = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
 
+# Install and Update need the built package (npm run package): the app, Node
+# and the service wrapper. The installer folder in the source code on GitHub
+# has none of them - say so plainly, before asking for administrator rights.
+function Assert-Package([switch]$Quiet) {
+  if (Test-Path (Join-Path $PackageRoot 'app\VERSION')) { return }
+  $isSource = Test-Path (Join-Path (Split-Path -Parent $PackageRoot) 'package.json')
+  Write-Host ''
+  Write-Host '  This is not the installer package.' -ForegroundColor Red
+  Write-Host ''
+  if ($isSource) {
+    Write-Host '  This folder is the source code (for example, downloaded from GitHub).'
+    Write-Host '  It cannot be installed directly.'
+    Write-Host ''
+  }
+  Write-Host '  What to do:'
+  Write-Host '    1. Get the file VyaparaBilling-<version>.zip (from the GitHub "Releases"'
+  Write-Host '       page, or from whoever supplies the app). A developer can build it'
+  Write-Host '       with: npm run package'
+  Write-Host '    2. Right-click the zip > Extract All.'
+  Write-Host '    3. Open the extracted folder and double-click "Install Vyapara.bat".'
+  if (-not $Quiet) { Write-Host ''; Read-Host 'Press Enter to close this window' | Out-Null }
+  exit 1
+}
+
 function Test-IsAdmin {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   return ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)

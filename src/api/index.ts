@@ -1,5 +1,7 @@
 import { useAuthStore } from '../store/useAuthStore';
 import type { StaffAccount, User } from '../types';
+import { t } from '../i18n';
+import { translateServerMessage } from '../i18n/serverMessages';
 
 const API_BASE = '/api';
 
@@ -61,7 +63,8 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
     }
     // Carry the status and the server's reason code, so a caller can tell
     // "prices changed, refresh" (409 PRICE_CHANGED) from a plain failure.
-    const error = new Error(data?.error || `Request failed with status ${response.status}`) as ApiError;
+    // The server answers in English; show its reason in the language on screen.
+    const error = new Error(data?.error ? translateServerMessage(String(data.error)) : t('Request failed with status {status}', { status: response.status })) as ApiError;
     error.status = response.status;
     error.code = data?.code;
     throw error;
@@ -98,6 +101,10 @@ export const api = {
   getItems: (params?: ListQuery) => fetchWithAuth(`/items${buildQuery(params)}`).then(unwrap),
   getItemsPage: (params?: ListQuery) => fetchWithAuth(`/items${buildQuery(params)}`),
   // No addItem: items are created only as new lines of a saved purchase.
+  /** Kannada names by English name, and how many items are still waiting for one. */
+  getKannadaItemNames: (): Promise<{ names: Record<string, string>; enabled: boolean; pending: number; last_error: string | null; last_run_at: string | null }> =>
+    fetchWithAuth('/items/kannada-names'),
+  translateItemNames: () => fetchWithAuth('/items/translate', { method: 'POST' }),
   updateItem: (id: number, item: any) => fetchWithAuth(`/items/${id}`, { method: 'PUT', body: JSON.stringify(item) }),
   deleteItem: (id: number) => fetchWithAuth(`/items/${id}`, { method: 'DELETE' }),
   /** An item's stock batch by batch, oldest (next to sell) first. */

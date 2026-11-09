@@ -3,6 +3,7 @@ import { useCartStore } from '../store/useCartStore';
 import { useNoticeStore } from '../store/useNoticeStore';
 import type { CartItem, Item, StockBatch } from '../types';
 import { round3 } from './billMath';
+import { t } from '../i18n';
 
 /**
  * Putting items into the bill, priced first-in first-out.
@@ -29,7 +30,7 @@ export const addItemToCart = async (item: Item, quantity = 1): Promise<boolean> 
     const available = round3(batches.reduce((acc, batch) => acc + batch.quantity_remaining, 0));
 
     if (available <= 0) {
-      notice.show(`${item.name} is out of stock.`, 'warning');
+      notice.show(t('{name} is out of stock.', { name: item.name }), 'warning');
       return false;
     }
 
@@ -37,14 +38,14 @@ export const addItemToCart = async (item: Item, quantity = 1): Promise<boolean> 
     const active = cart.carts.find((entry) => entry.id === cart.activeCartId);
     const alreadyInBill = active?.items.find((line) => line.id === item.id)?.quantity ?? 0;
     if (round3(alreadyInBill + quantity) > available) {
-      notice.show(`Only ${available} ${item.metric} of ${item.name} in stock.`, 'warning');
+      notice.show(t('Only {available} {metric} of {name} in stock.', { available, metric: item.metric, name: item.name }), 'warning');
       return false;
     }
 
     cart.addItem(res.item ? { ...item, ...res.item } : item, batches, quantity);
     return true;
   } catch (err: any) {
-    notice.show(err?.message || `Could not add ${item.name}.`, 'error');
+    notice.show(err?.message || t('Could not add {name}.', { name: item.name }), 'error');
     return false;
   }
 };

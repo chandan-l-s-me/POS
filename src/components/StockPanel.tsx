@@ -5,6 +5,9 @@ import { api } from '../api';
 import type { Item, StockBatch } from '../types';
 import { cn, formatDateTimeInIST } from '../lib/utils';
 import { round3 } from '../lib/billMath';
+import { t, unitLabel } from '../i18n';
+import { ItemName } from './ItemName';
+import { tRich } from '../i18n/rich';
 
 /**
  * One item's stock, batch by batch, in the order it will be sold.
@@ -30,10 +33,10 @@ const money = (value: number | null | undefined) =>
 
 const sourceLabel = (batch: StockBatch) => {
   if (batch.source === 'purchase') {
-    return [batch.purchase_number, batch.supplier_name].filter(Boolean).join(' · ') || 'Purchase';
+    return [batch.purchase_number, batch.supplier_name].filter(Boolean).join(' · ') || t('Purchase');
   }
-  if (batch.source === 'adjustment') return 'Added by hand';
-  return 'Opening stock';
+  if (batch.source === 'adjustment') return t('Added by hand');
+  return t('Opening stock');
 };
 
 export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, onChanged }) => {
@@ -64,7 +67,7 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
       setSummary({ stock_quantity: res?.item?.stock_quantity ?? 0, price: res?.item?.price ?? 0 });
       setError('');
     } catch (err: any) {
-      setError(err?.message || 'Could not load stock.');
+      setError(err?.message || t('Could not load stock.'));
     } finally {
       setLoading(false);
     }
@@ -80,17 +83,17 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
   const saveReprice = async (batchId: number) => {
     const price = Number(repriceValue);
     if (!(price > 0)) {
-      setError('Enter a selling price above zero.');
+      setError(t('Enter a selling price above zero.'));
       return;
     }
     try {
       await api.repriceBatch(batchId, price);
       setRepricingId(null);
-      setMessage('Price updated.');
+      setMessage(t('Price updated.'));
       await load();
       onChanged();
     } catch (err: any) {
-      setError(err?.message || 'Could not update the price.');
+      setError(err?.message || t('Could not update the price.'));
     }
   };
 
@@ -98,11 +101,11 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
     e.preventDefault();
     const amount = round3(Number(quantity));
     if (!(amount > 0)) {
-      setError('Enter how much to add or remove.');
+      setError(t('Enter how much to add or remove.'));
       return;
     }
     if (!reason.trim()) {
-      setError('Enter a reason — it is kept in the activity log.');
+      setError(t('Enter a reason — it is kept in the activity log.'));
       return;
     }
     setSaving(true);
@@ -118,11 +121,11 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
       setUnitCost('');
       setSellingPrice('');
       setError('');
-      setMessage(`Stock is now ${result.stock_quantity} ${item.metric}.`);
+      setMessage(t('Stock is now {stock_quantity} {metric}.', { stock_quantity: result.stock_quantity, metric: item.metric }));
       await load();
       onChanged();
     } catch (err: any) {
-      setError(err?.message || 'Could not adjust stock.');
+      setError(err?.message || t('Could not adjust stock.'));
     } finally {
       setSaving(false);
     }
@@ -139,17 +142,19 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
           <div>
             <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-gray-400">
               <Layers size={14} />
-              Stock &amp; prices
+              {t('Stock & prices')}
             </p>
-            <h3 className="mt-1 text-2xl font-bold text-gray-900">{item.name}</h3>
+            <h3 className="mt-1 text-2xl font-bold text-gray-900"><ItemName name={item.name} /></h3>
             {summary && (
               <p className="mt-2 text-sm text-gray-500">
-                <span className="font-bold text-gray-900">{summary.stock_quantity} {item.metric}</span> in stock ·
-                selling next at <span className="font-bold text-gray-900">{money(summary.price)}</span>
+                {tRich('{stock} in stock · selling next at {price}', {
+                  stock: <span className="font-bold text-gray-900">{summary.stock_quantity} {unitLabel(item.metric)}</span>,
+                  price: <span className="font-bold text-gray-900">{money(summary.price)}</span>,
+                })}
               </p>
             )}
           </div>
-          <button onClick={onClose} className="rounded-full p-2 hover:bg-gray-100" aria-label="Close stock">
+          <button onClick={onClose} className="rounded-full p-2 hover:bg-gray-100" aria-label={t('Close stock')}>
             <X size={22} />
           </button>
         </div>
@@ -163,29 +168,29 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
           )}
 
           <div className="flex items-center justify-between">
-            <p className="text-sm text-gray-500">Sold from the top down: the oldest stock goes first, at its own price.</p>
+            <p className="text-sm text-gray-500">{t('Sold from the top down: the oldest stock goes first, at its own price.')}</p>
             <label className="flex items-center gap-2 text-sm text-gray-500 cursor-pointer">
               <input type="checkbox" checked={showSoldOut} onChange={(e) => setShowSoldOut(e.target.checked)} className="accent-orange-600" />
-              Show sold-out batches
+              {t('Show sold-out batches')}
             </label>
           </div>
 
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-gray-100 text-xs uppercase tracking-wider text-gray-400">
-                <th className="pb-3 font-bold">Received</th>
-                <th className="pb-3 font-bold">From</th>
-                <th className="pb-3 text-right font-bold">Bought</th>
-                <th className="pb-3 text-right font-bold">Left</th>
-                {isAdmin && <th className="pb-3 text-right font-bold">Cost<span className="block font-normal normal-case">before GST</span></th>}
-                <th className="pb-3 text-right font-bold">Selling price</th>
+                <th className="pb-3 font-bold">{t('Received')}</th>
+                <th className="pb-3 font-bold">{t('From')}</th>
+                <th className="pb-3 text-right font-bold">{t('Bought')}</th>
+                <th className="pb-3 text-right font-bold">{t('Left')}</th>
+                {isAdmin && <th className="pb-3 text-right font-bold">{t('Cost')}<span className="block font-normal normal-case">{t('before GST')}</span></th>}
+                <th className="pb-3 text-right font-bold">{t('Selling price')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
               {loading ? (
-                <tr><td colSpan={7} className="py-10 text-center text-gray-400">Loading stock…</td></tr>
+                <tr><td colSpan={7} className="py-10 text-center text-gray-400">{t('Loading stock…')}</td></tr>
               ) : visible.length === 0 ? (
-                <tr><td colSpan={7} className="py-10 text-center text-gray-400">No stock. It arrives with a purchase.</td></tr>
+                <tr><td colSpan={7} className="py-10 text-center text-gray-400">{t('No stock. It arrives with a purchase.')}</td></tr>
               ) : (
                 visible.map((batch) => (
                   <tr key={batch.id} className={cn('align-top', batch.quantity_remaining <= 0 && 'opacity-50')}>
@@ -193,7 +198,7 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
                       {formatDateTimeInIST(batch.received_at)}
                       {batch.id === nextToSell && (
                         <span className="ml-2 rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-black uppercase text-orange-600">
-                          Sells next
+                          {t('Sells next')}
                         </span>
                       )}
                     </td>
@@ -217,8 +222,8 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
                             }}
                             className="w-24 rounded-xl border border-gray-200 bg-gray-50 px-2 py-1 text-right outline-none focus:ring-2 focus:ring-orange-500"
                           />
-                          <button onClick={() => void saveReprice(batch.id)} className="text-xs font-bold text-orange-600 hover:underline">Save</button>
-                          <button onClick={() => setRepricingId(null)} className="text-xs text-gray-400 hover:underline">Cancel</button>
+                          <button onClick={() => void saveReprice(batch.id)} className="text-xs font-bold text-orange-600 hover:underline">{t('Save')}</button>
+                          <button onClick={() => setRepricingId(null)} className="text-xs text-gray-400 hover:underline">{t('Cancel')}</button>
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-2">
@@ -228,7 +233,7 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
                               onClick={() => { setRepricingId(batch.id); setRepriceValue(String(batch.selling_price)); setMessage(''); }}
                               className="text-xs font-bold text-orange-600 hover:underline"
                             >
-                              Change
+                              {t('Change')}
                             </button>
                           )}
                         </span>
@@ -244,7 +249,7 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
         {isAdmin && (
           <form onSubmit={submitAdjustment} className="border-t border-gray-100 bg-gray-50 p-6 space-y-3">
             <div className="flex items-center gap-3">
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">Adjust stock</p>
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-gray-400">{t('Adjust stock')}</p>
               <div className="flex rounded-xl border border-gray-200 bg-white p-0.5 text-xs font-bold">
                 {(['remove', 'add'] as const).map((option) => (
                   <button
@@ -253,19 +258,19 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
                     onClick={() => setMode(option)}
                     className={cn('rounded-lg px-3 py-1.5', mode === option ? 'bg-orange-600 text-white' : 'text-gray-500')}
                   >
-                    {option === 'remove' ? 'Remove' : 'Add'}
+                    {option === 'remove' ? t('Remove') : t('Add')}
                   </button>
                 ))}
               </div>
               <p className="text-xs text-gray-400">
                 {mode === 'remove'
-                  ? 'Taken from the oldest stock first — damaged, expired, a recount.'
-                  : 'Added as a new batch — stock that was not bought through a purchase.'}
+                  ? t('Taken from the oldest stock first — damaged, expired, a recount.')
+                  : t('Added as a new batch — stock that was not bought through a purchase.')}
               </p>
             </div>
             <div className="flex flex-wrap items-end gap-3">
               <label className="space-y-1">
-                <span className="block text-xs font-semibold text-gray-600">Quantity ({item.metric})</span>
+                <span className="block text-xs font-semibold text-gray-600">{t('Quantity ({metric})', { metric: unitLabel(item.metric) })}</span>
                 <input
                   type="number" step="0.001" min="0"
                   value={quantity}
@@ -276,34 +281,34 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
               {mode === 'add' && (
                 <>
                   <label className="space-y-1">
-                    <span className="block text-xs font-semibold text-gray-600">Cost before GST</span>
+                    <span className="block text-xs font-semibold text-gray-600">{t('Cost before GST')}</span>
                     <input
                       type="number" step="0.01" min="0"
                       value={unitCost}
                       onChange={(e) => setUnitCost(e.target.value)}
-                      placeholder={latest?.unit_cost != null ? String(latest.unit_cost) : 'Optional'}
+                      placeholder={latest?.unit_cost != null ? String(latest.unit_cost) : t('Optional')}
                       className="w-32 rounded-2xl border border-gray-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-orange-500"
                     />
                   </label>
                   <label className="space-y-1">
-                    <span className="block text-xs font-semibold text-gray-600">Selling price</span>
+                    <span className="block text-xs font-semibold text-gray-600">{t('Selling price')}</span>
                     <input
                       type="number" step="0.01" min="0.01"
                       value={sellingPrice}
                       onChange={(e) => setSellingPrice(e.target.value)}
-                      placeholder={latest ? String(latest.selling_price) : 'Required'}
+                      placeholder={latest ? String(latest.selling_price) : t('Required')}
                       className="w-32 rounded-2xl border border-gray-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-orange-500"
                     />
                   </label>
                 </>
               )}
               <label className="flex-1 min-w-[14rem] space-y-1">
-                <span className="block text-xs font-semibold text-gray-600">Reason</span>
+                <span className="block text-xs font-semibold text-gray-600">{t('Reason')}</span>
                 <input
                   type="text"
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
-                  placeholder={mode === 'remove' ? 'e.g. 3 packets expired' : 'e.g. opening stock'}
+                  placeholder={mode === 'remove' ? t('e.g. 3 packets expired') : t('e.g. opening stock')}
                   className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-orange-500"
                 />
               </label>
@@ -312,7 +317,7 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
                 disabled={saving}
                 className="rounded-2xl bg-orange-600 px-6 py-3 font-bold text-white shadow-lg shadow-orange-100 transition-all hover:bg-orange-700 disabled:opacity-50 disabled:pointer-events-none"
               >
-                {saving ? 'Saving…' : mode === 'remove' ? 'Remove stock' : 'Add stock'}
+                {saving ? t('Saving…') : mode === 'remove' ? t('Remove stock') : t('Add stock')}
               </button>
             </div>
           </form>

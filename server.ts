@@ -12,6 +12,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import db, { dbPath, initDb, syncItemStock } from './db/index';
 import { createGoogleDrive } from './server/googleDrive';
+import { startItemNameTranslation } from './server/translate';
 import { readPool } from './db/asyncRead';
 // The same arithmetic the till runs, so the screen and the ledger cannot
 // disagree. See src/lib/billMath.ts.
@@ -388,6 +389,9 @@ const pruneAuditLogs = () => {
 
 // Initialize DB
 initDb();
+
+// Kannada item names, filled in from Google Translate in the background.
+const itemNames = startItemNameTranslation(db);
 
 const BCRYPT_ROUNDS = 12;
 
@@ -1291,7 +1295,7 @@ app.get('/api/audit-logs', authenticateToken, requireAdmin, route(async (req, re
 // on every page load — dead weight in the payload and, for image_url,
 // unbounded. The Items admin screen asks for the full row via ?withImages=1.
 const ITEM_LIST_COLUMNS =
-  'id, name, hsn_code, price, metric, is_loose, gst_applicable, gst_mode, gst_rate, sgst_rate, cgst_rate, igst_rate, stock_quantity, default_profit_percent';
+  'id, name, name_kn, hsn_code, price, metric, is_loose, gst_applicable, gst_mode, gst_rate, sgst_rate, cgst_rate, igst_rate, stock_quantity, default_profit_percent';
 
 app.get('/api/items', authenticateToken, route((req, res) => {
   const { limit, offset } = readPaging(req);
@@ -1308,6 +1312,24 @@ app.get('/api/items', authenticateToken, route((req, res) => {
   const { total } = db.prepare(`SELECT COUNT(*) as total FROM items ${where}`).get(...params) as any;
 
   res.json({ data: items, total, limit, offset });
+}));
+
+/**
+ * Kannada names of items, by English name, for a Kannada screen to show in
+ * place of the English ones. Only items that have one; `pending` is how many
+ * are still waiting for translation.
+ */
+app.get('/api/items/kannada-names', authenticateToken, route((_req, res) => {
+  const rows = db.prepare("SELECT name, name_kn FROM items WHERE name_kn IS NOT NULL AND name_kn <> ''").all() as Array<{ name: string; name_kn: string }>;
+  const names: Record<string, string> = {};
+  for (const row of rows) names[row.name] = row.name_kn;
+  res.json({ names, ...itemNames.status() });
+}));
+
+/** Translate the items still missing a Kannada name, now. */
+app.post('/api/items/translate', authenticateToken, requireAdmin, route(async (_req, res) => {
+  const { translated } = await itemNames.runNow();
+  res.json({ translated, ...itemNames.status() });
 }));
 
 /**
@@ -1353,10 +1375,17 @@ app.put('/api/items/:id', authenticateToken, requireAdmin, route((req, res) => {
     return;
   }
 
+  // The Kannada name: typed by the admin, or blank to have it translated. Left
+  // out, it stays as it was, unless the English name changed, when it is
+  // translated again.
+  const typedKannada = req.body?.name_kn === undefined ? undefined : optString(req.body.name_kn, 'Kannada name', 200) || null;
+  const name_kn = typedKannada !== undefined ? typedKannada : item.name === existingItem.name ? existingItem.name_kn : null;
+
   db.prepare(`
-    UPDATE items SET name = ?, hsn_code = ?, metric = ?, is_loose = ?, gst_applicable = ?, gst_mode = ?, gst_rate = ?, sgst_rate = ?, cgst_rate = ?, igst_rate = ?, image_url = ?
+    UPDATE items SET name = ?, name_kn = ?, hsn_code = ?, metric = ?, is_loose = ?, gst_applicable = ?, gst_mode = ?, gst_rate = ?, sgst_rate = ?, cgst_rate = ?, igst_rate = ?, image_url = ?
     WHERE id = ?
-  `).run(item.name, item.hsn_code, item.metric, item.is_loose, item.gst_applicable, item.gst_mode, item.gst_rate, item.sgst_rate, item.cgst_rate, item.igst_rate, item.image_url, id);
+  `).run(item.name, name_kn, item.hsn_code, item.metric, item.is_loose, item.gst_applicable, item.gst_mode, item.gst_rate, item.sgst_rate, item.cgst_rate, item.igst_rate, item.image_url, id);
+  if (name_kn === null) itemNames.kick();
 
   writeAuditLog({
     user: req.user,
@@ -2832,6 +2861,22 @@ const PURCHASE_PAID_SQL =
   '(SELECT ROUND(COALESCE(SUM(a.amount), 0), 2) FROM supplier_payment_allocations a WHERE a.purchase_id = p.id)';
 
 /**
+ * What has been paid against purchase `p` in one way (`null`: payments whose
+ * method was not recorded), in SQL. Payments made later count towards the
+ * purchase they settled, so a purchase's parts add up to its amount paid.
+ */
+const purchasePaidBySql = (method: PaymentMethod | null) =>
+  `(SELECT ROUND(COALESCE(SUM(a.amount), 0), 2) FROM supplier_payment_allocations a
+     JOIN supplier_payments sp ON sp.id = a.payment_id
+     WHERE a.purchase_id = p.id AND ${method ? `sp.method = '${method}'` : 'sp.method IS NULL'})`;
+
+/** The columns: paid_cash, paid_upi, paid_bank, paid_cheque, paid_unrecorded. */
+const PURCHASE_PAID_BY_METHOD_SQL = [
+  ...PAYMENT_METHODS.map((method) => `${purchasePaidBySql(method)} AS paid_${method}`),
+  `${purchasePaidBySql(null)} AS paid_unrecorded`,
+].join(',\n           ');
+
+/**
  * The order a supplier's invoices are settled in: oldest invoice first. The
  * invoice date is the supplier's own, and is optional, so the day the
  * purchase was entered stands in for it.
@@ -3172,6 +3217,7 @@ app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => 
     details: `Created purchase ${result.purchase_number} from ${supplier_name} for amount ₹${total_amount.toFixed(2)}` +
       (balance_due > 0 ? ` (paid ₹${amount_paid.toFixed(2)}, ₹${balance_due.toFixed(2)} on credit)` : ' (paid in full)'),
   });
+  if (result.created_items.length) itemNames.kick();
   for (const item of result.created_items) {
     writeAuditLog({
       user: req.user,
@@ -3211,7 +3257,8 @@ app.get('/api/purchases', authenticateToken, requireAdmin, route((req, res) => {
 
   const purchases = db.prepare(`
     SELECT p.*, u.name as user_name, ${PURCHASE_PAID_SQL} AS amount_paid,
-           ROUND(p.total_amount - ${PURCHASE_PAID_SQL}, 2) AS balance_due
+           ROUND(p.total_amount - ${PURCHASE_PAID_SQL}, 2) AS balance_due,
+           ${PURCHASE_PAID_BY_METHOD_SQL}
     FROM purchases p
     JOIN users u ON p.user_id = u.id
     ${whereSql}

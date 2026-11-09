@@ -14,6 +14,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Link } from 'react-router-dom';
 import { Supplier } from '../types';
 import { formatRupees } from '../lib/supplierPayments';
+import { t } from '../i18n';
 
 export const Suppliers = () => {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -31,13 +32,13 @@ export const Suppliers = () => {
     api.getSuppliers()
       .then((data) => {
         if (!Array.isArray(data)) {
-          throw new Error('Suppliers response is invalid. Please restart the app server and try again.');
+          throw new Error(t('Suppliers response is invalid. Please restart the app server and try again.'));
         }
         setSuppliers(data);
       })
       .catch((err) => {
         console.error('Failed to fetch suppliers:', err);
-        alert(`Failed to load suppliers: ${err.message}`);
+        alert(t('Failed to load suppliers: {message}', { message: err.message }));
       });
   }, []);
 
@@ -98,7 +99,7 @@ export const Suppliers = () => {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search suppliers..."
+            placeholder={t('Search suppliers...')}
             className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
           />
         </div>
@@ -107,7 +108,7 @@ export const Suppliers = () => {
           className="flex items-center gap-2 px-6 py-3 bg-orange-600 text-white font-bold rounded-2xl shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all"
         >
           <Plus size={20} />
-          Add New Supplier
+          {t('Add New Supplier')}
         </button>
       </div>
 
@@ -124,8 +125,8 @@ export const Suppliers = () => {
               </div>
               <button
                 onClick={() => handleOpenModal(supplier)}
-                aria-label={`Edit ${supplier.name}`}
-                title="Edit"
+                aria-label={t('Edit {name}', { name: supplier.name })}
+                title={t('Edit')}
                 className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-all"
               >
                 <Edit2 size={18} />
@@ -137,7 +138,7 @@ export const Suppliers = () => {
             <div className="space-y-3 mb-6">
               <div className="flex items-center gap-3 text-gray-500 text-sm">
                 <Phone size={16} />
-                <span>{supplier.phone || 'No phone'}</span>
+                <span>{supplier.phone || t('No phone')}</span>
               </div>
               {supplier.address && (
                 <div className="flex items-start gap-3 text-gray-500 text-sm">
@@ -147,7 +148,7 @@ export const Suppliers = () => {
               )}
               {supplier.gstin && (
                 <div className="flex items-center gap-3 text-gray-500 text-sm">
-                  <span className="font-bold text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">GST</span>
+                  <span className="font-bold text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">{t('GST')}</span>
                   <span>{supplier.gstin}</span>
                 </div>
               )}
@@ -155,13 +156,13 @@ export const Suppliers = () => {
 
             <div className="pt-6 border-t border-gray-50 flex items-center justify-between">
               <div>
-                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">Owed to supplier</p>
+                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">{t('Owed to supplier')}</p>
                 {(supplier.amount_due ?? 0) > 0 ? (
                   <Link to="/purchase-credit" className="text-lg font-black text-orange-600 hover:underline">
                     {formatRupees(supplier.amount_due ?? 0)}
                   </Link>
                 ) : (
-                  <p className="text-lg font-black text-emerald-600">Nothing due</p>
+                  <p className="text-lg font-black text-emerald-600">{t('Nothing due')}</p>
                 )}
               </div>
               <Truck size={20} className="text-gray-400" />
@@ -181,7 +182,7 @@ export const Suppliers = () => {
             >
               <form onSubmit={handleSubmit}>
                 <div className="p-8 border-b border-gray-100 flex items-center justify-between">
-                  <h3 className="font-bold text-2xl">{editingSupplier ? 'Edit Supplier' : 'Add New Supplier'}</h3>
+                  <h3 className="font-bold text-2xl">{editingSupplier ? t('Edit Supplier') : t('Add New Supplier')}</h3>
                   <button type="button" onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-100 rounded-full">
                     <X size={24} />
                   </button>
@@ -189,7 +190,7 @@ export const Suppliers = () => {
 
                 <div className="p-8 space-y-6">
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">Supplier Name</label>
+                    <label className="text-sm font-bold text-gray-700">{t('Supplier Name')}</label>
                     <input
                       type="text"
                       value={formData.name}
@@ -200,7 +201,7 @@ export const Suppliers = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">Phone Number</label>
+                    <label className="text-sm font-bold text-gray-700">{t('Phone Number')}</label>
                     <input
                       type="tel"
                       value={formData.phone}
@@ -210,7 +211,7 @@ export const Suppliers = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">Address</label>
+                    <label className="text-sm font-bold text-gray-700">{t('Address')}</label>
                     <textarea
                       value={formData.address}
                       onChange={(e) => setFormData({ ...formData, address: e.target.value })}
@@ -219,7 +220,7 @@ export const Suppliers = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-gray-700">GSTIN</label>
+                    <label className="text-sm font-bold text-gray-700">{t('GSTIN')}</label>
                     <input
                       type="text"
                       value={formData.gstin}
@@ -235,14 +236,14 @@ export const Suppliers = () => {
                     onClick={() => setShowModal(false)}
                     className="flex-1 py-4 bg-white border border-gray-200 text-gray-600 font-bold rounded-2xl hover:bg-gray-100 transition-all"
                   >
-                    Cancel
+                    {t('Cancel')}
                   </button>
                   <button
                     type="submit"
                     className="flex-1 py-4 bg-orange-600 text-white font-bold rounded-2xl shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all flex items-center justify-center gap-2"
                   >
                     <Save size={20} />
-                    {editingSupplier ? 'Update Supplier' : 'Save Supplier'}
+                    {editingSupplier ? t('Update Supplier') : t('Save Supplier')}
                   </button>
                 </div>
               </form>

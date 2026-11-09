@@ -38,6 +38,8 @@ export interface ShopSettings {
 export interface Item {
   id: number;
   name: string;
+  /** The name in Kannada: translated automatically, or typed by an admin. Null until then. */
+  name_kn?: string | null;
   hsn_code: string;
   /**
    * GST-inclusive selling price of the batch that sells next (the oldest with
@@ -235,6 +237,16 @@ export interface Purchase {
   /** Paid against this purchase so far, and what is still owed on it. */
   amount_paid?: number;
   balance_due?: number;
+  /**
+   * The amount paid, by how it was paid (in the purchase list). Payments made
+   * later count towards the purchase they settled.
+   */
+  paid_cash?: number;
+  paid_upi?: number;
+  paid_bank?: number;
+  paid_cheque?: number;
+  /** Paid without the method being recorded. */
+  paid_unrecorded?: number;
   payments?: PurchasePayment[];
 }
 

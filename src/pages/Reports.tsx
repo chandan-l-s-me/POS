@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, Search } from 'lucide-react';
+import { Banknote, CircleHelp, Clock, Download, FileText, HandCoins, Landmark, Search, Smartphone } from 'lucide-react';
 import { api } from '../api';
 import { Bill, Purchase } from '../types';
 import { cn, formatDateInIST, formatDateTimeInIST, getISTTimestampForFileName } from '../lib/utils';
 import { billCustomerContactName, billCustomerDisplayName } from '../lib/customer';
 import { DateFilterButton, DateFilterPanel } from '../components/DateFilter';
 import { SalesPurchaseSwitch, useTradeView } from '../components/SalesPurchaseSwitch';
+import { paymentLabel, t, tn, unitLabel, withEnglish } from '../i18n';
+import { ItemName } from '../components/ItemName';
 
 interface PurchaseReportRow {
   purchase_id: number;
@@ -102,6 +104,75 @@ const SummaryCard = ({ label, value, tone }: { label: string; value: string; ton
 
 const headCell = 'px-6 py-4 text-xs font-bold text-gray-500 uppercase whitespace-nowrap';
 
+interface MethodPart {
+  key: string;
+  label: string;
+  amount: number;
+  /** How many bills or purchases have some of their amount here. */
+  count: number;
+  icon: React.ElementType;
+  /** Its colour, on the bar and behind its icon. */
+  bar: string;
+}
+
+/**
+ * How the period's bills (or purchases) were paid: one bar split by method,
+ * then a tile per method with its total, how many bills it covers and its
+ * share. The parts add up to the total in the corner.
+ */
+const PaymentMethodBreakdown = ({ title, description, total, parts, countLabel, loading }: {
+  title: string;
+  description: string;
+  total: number;
+  parts: MethodPart[];
+  countLabel: (count: number) => string;
+  loading: boolean;
+}) => {
+  const shown = parts.filter((part) => part.amount > 0.004 || part.key !== 'unrecorded');
+  const share = (amount: number) => (total > 0 ? (amount / total) * 100 : 0);
+  // Whole numbers, except near 0 and 100, so 99.7% does not read as all of it.
+  const percent = (value: number) =>
+    (value > 0 && value < 1) || (value > 99 && value < 100) ? value.toFixed(1) : String(Math.round(value));
+  return (
+    <section className="bg-white rounded-3xl shadow-sm border border-gray-100 p-5 sm:p-6" aria-label={title}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg font-bold text-gray-900">{title}</h2>
+          <p className="text-sm text-gray-500">{description}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-xs font-bold uppercase text-gray-500">{t('Total')}</p>
+          <p className="text-2xl font-black tabular-nums text-gray-900">{loading ? '…' : rupees(total)}</p>
+        </div>
+      </div>
+
+      {/* One bar, split in proportion. */}
+      <div className="mt-4 flex h-3 w-full overflow-hidden rounded-full bg-gray-100" aria-hidden>
+        {!loading && shown.map((part) => part.amount > 0 && (
+          <div key={part.key} className={part.bar} style={{ width: `${share(part.amount)}%` }} title={`${part.label} ${rupees(part.amount)}`} />
+        ))}
+      </div>
+
+      <div className={cn('mt-4 grid gap-3 grid-cols-2', shown.length > 4 ? 'lg:grid-cols-3 2xl:grid-cols-6' : 'lg:grid-cols-3')}>
+        {shown.map(({ key, label, amount, count, icon: Icon, bar }) => (
+          <div key={key} className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+            <div className="flex items-center gap-2">
+              <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-white', bar)}>
+                <Icon size={16} />
+              </span>
+              <span className="text-sm font-bold text-gray-700">{label}</span>
+            </div>
+            <p className="mt-3 text-xl font-black tabular-nums text-gray-900">{loading ? '…' : rupees(amount)}</p>
+            <p className="mt-0.5 text-xs text-gray-500">
+              {loading ? '\u00a0' : `${countLabel(count)} · ${percent(share(amount))}%`}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+};
+
 /**
  * Sales or purchase records for a date range, one side at a time (the switch
  * at the top, kept in the address as ?view=purchases), each with its totals
@@ -148,7 +219,7 @@ export const Reports = () => {
     load
       .catch((err) => {
         console.error('Failed to load reports:', err);
-        if (current) alert(`Failed to load reports: ${err.message}`);
+        if (current) alert(t('Failed to load reports: {message}', { message: err.message }));
       })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
@@ -179,11 +250,12 @@ export const Reports = () => {
 
   const exportSales = () => {
     if (filteredSalesRows.length === 0) {
-      alert('No sales records available for the current filter.');
+      alert(t('No sales records available for the current filter.'));
       return;
     }
 
-    downloadCsv(
+    // The file reads the same in either language.
+    withEnglish(() => downloadCsv(
       `sales-report-${getISTTimestampForFileName()}.csv`,
       ['Bill Number', 'Date & Time', 'Customer', 'Contact Person', 'Cashier', 'Payment Method', 'Item', 'HSN', 'Quantity', 'Metric', 'Base Price', 'SGST Amount', 'Other GST Amount', 'Line Total'],
       filteredSalesRows.map((row) => [
@@ -202,16 +274,16 @@ export const Reports = () => {
         (row.cgst_amount + (row.igst_amount || 0)).toFixed(2),
         row.total_amount.toFixed(2),
       ])
-    );
+    ));
   };
 
   const exportPurchases = () => {
     if (filteredPurchaseRows.length === 0) {
-      alert('No purchase records available for the current filter.');
+      alert(t('No purchase records available for the current filter.'));
       return;
     }
 
-    downloadCsv(
+    withEnglish(() => downloadCsv(
       `purchase-report-${getISTTimestampForFileName()}.csv`,
       // IGST columns were missing, so an inter-state purchase downloaded as if
       // it carried no tax. Selling price and profit % are recorded on each
@@ -240,7 +312,7 @@ export const Reports = () => {
         row.selling_price == null ? '' : row.selling_price.toFixed(2),
         row.profit_percent == null ? '' : row.profit_percent.toFixed(2),
       ])
-    );
+    ));
   };
 
   const isSales = view === 'sales';
@@ -257,7 +329,7 @@ export const Reports = () => {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder={isSales ? 'Search bill, customer, cashier, item, HSN...' : 'Search supplier, GSTIN, invoice, item, HSN...'}
+              placeholder={isSales ? t('Search bill, customer, cashier, item, HSN...') : t('Search supplier, GSTIN, invoice, item, HSN...')}
               className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
             />
           </div>
@@ -271,44 +343,74 @@ export const Reports = () => {
           to={endDate}
           onFromChange={setStartDate}
           onToChange={setEndDate}
-          description="Totals, the table and the CSV download all follow this range."
+          description={t('Totals, the table and the CSV download all follow this range.')}
         />
       )}
 
       {truncated && (
         <div className="rounded-2xl border border-orange-200 bg-orange-50 px-6 py-4 text-sm font-semibold text-orange-700">
-          This date range matches more rows than can be shown at once. Figures below cover only the first{' '}
-          {REPORT_LIMIT.toLocaleString('en-IN')} line items &mdash; narrow the date range for a complete report.
+          {t('This date range matches more rows than can be shown at once. Figures below cover only the first {value} line items — narrow the date range for a complete report.', { value: REPORT_LIMIT.toLocaleString('en-IN') })}
         </div>
       )}
 
       <div className="grid gap-4 grid-cols-2 xl:grid-cols-4">
         {isSales ? (
           <>
-            <SummaryCard label="Sales total" value={rupees(sum(filteredBills, (b) => b.total_amount))} />
-            <SummaryCard label="GST collected" value={rupees(sum(filteredBills, (b) => b.tax_amount))} tone="orange" />
-            <SummaryCard label="Taxable value" value={rupees(sum(filteredBills, (b) => b.subtotal_amount ?? b.total_amount - b.tax_amount))} />
-            <SummaryCard label="Bills" value={filteredBills.length.toLocaleString('en-IN')} />
+            <SummaryCard label={t('Sales total')} value={rupees(sum(filteredBills, (b) => b.total_amount))} />
+            <SummaryCard label={t('GST collected')} value={rupees(sum(filteredBills, (b) => b.tax_amount))} tone="orange" />
+            <SummaryCard label={t('Taxable value')} value={rupees(sum(filteredBills, (b) => b.subtotal_amount ?? b.total_amount - b.tax_amount))} />
+            <SummaryCard label={t('Bills')} value={filteredBills.length.toLocaleString('en-IN')} />
           </>
         ) : (
           <>
-            <SummaryCard label="Purchase total" value={rupees(sum(filteredPurchases, (p) => p.total_amount))} />
-            <SummaryCard label="GST paid" value={rupees(sum(filteredPurchases, (p) => p.tax_amount))} tone="amber" />
-            <SummaryCard label="Still owed" value={rupees(sum(filteredPurchases, (p) => p.balance_due ?? 0))} tone="red" />
-            <SummaryCard label="Purchases" value={filteredPurchases.length.toLocaleString('en-IN')} />
+            <SummaryCard label={t('Purchase total')} value={rupees(sum(filteredPurchases, (p) => p.total_amount))} />
+            <SummaryCard label={t('GST paid')} value={rupees(sum(filteredPurchases, (p) => p.tax_amount))} tone="amber" />
+            <SummaryCard label={t('Still owed')} value={rupees(sum(filteredPurchases, (p) => p.balance_due ?? 0))} tone="red" />
+            <SummaryCard label={t('Purchases')} value={filteredPurchases.length.toLocaleString('en-IN')} />
           </>
         )}
       </div>
 
+      {isSales ? (
+        <PaymentMethodBreakdown
+          title={t('How bills were paid')}
+          description={t('Cash, UPI and credit for the bills in this period. A bill paid partly one way and partly another is counted under each part.')}
+          total={sum(filteredBills, (b) => b.total_amount)}
+          countLabel={(count) => tn(count, '1 bill', '{count} bills')}
+          loading={loading}
+          parts={[
+            { key: 'cash', label: t('Cash'), amount: sum(filteredBills, (b) => b.cash_amount), count: filteredBills.filter((b) => b.cash_amount > 0).length, icon: Banknote, bar: 'bg-emerald-500' },
+            { key: 'upi', label: t('UPI'), amount: sum(filteredBills, (b) => b.upi_amount), count: filteredBills.filter((b) => b.upi_amount > 0).length, icon: Smartphone, bar: 'bg-sky-500' },
+            { key: 'credit', label: t('On credit'), amount: sum(filteredBills, (b) => b.credit_amount), count: filteredBills.filter((b) => b.credit_amount > 0).length, icon: HandCoins, bar: 'bg-amber-500' },
+          ]}
+        />
+      ) : (
+        <PaymentMethodBreakdown
+          title={t('How purchases were paid')}
+          description={t('What was paid for the purchases in this period, by how it was paid — including payments made later — and what is still owed.')}
+          total={sum(filteredPurchases, (p) => p.total_amount)}
+          countLabel={(count) => tn(count, '1 purchase', '{count} purchases')}
+          loading={loading}
+          parts={[
+            { key: 'cash', label: t('Cash'), amount: sum(filteredPurchases, (p) => p.paid_cash ?? 0), count: filteredPurchases.filter((p) => (p.paid_cash ?? 0) > 0).length, icon: Banknote, bar: 'bg-emerald-500' },
+            { key: 'upi', label: t('UPI'), amount: sum(filteredPurchases, (p) => p.paid_upi ?? 0), count: filteredPurchases.filter((p) => (p.paid_upi ?? 0) > 0).length, icon: Smartphone, bar: 'bg-sky-500' },
+            { key: 'bank', label: t('Bank transfer'), amount: sum(filteredPurchases, (p) => p.paid_bank ?? 0), count: filteredPurchases.filter((p) => (p.paid_bank ?? 0) > 0).length, icon: Landmark, bar: 'bg-violet-500' },
+            { key: 'cheque', label: t('Cheque'), amount: sum(filteredPurchases, (p) => p.paid_cheque ?? 0), count: filteredPurchases.filter((p) => (p.paid_cheque ?? 0) > 0).length, icon: FileText, bar: 'bg-teal-500' },
+            { key: 'unrecorded', label: t('Not recorded'), amount: sum(filteredPurchases, (p) => p.paid_unrecorded ?? 0), count: filteredPurchases.filter((p) => (p.paid_unrecorded ?? 0) > 0).length, icon: CircleHelp, bar: 'bg-gray-400' },
+            { key: 'owed', label: t('Still owed'), amount: sum(filteredPurchases, (p) => p.balance_due ?? 0), count: filteredPurchases.filter((p) => (p.balance_due ?? 0) > 0.004).length, icon: Clock, bar: 'bg-rose-500' },
+          ]}
+        />
+      )}
+
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-6 py-5 border-b border-gray-100 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h2 className="text-xl font-bold text-gray-900">{isSales ? 'Sales' : 'Purchases'}, item by item</h2>
+            <h2 className="text-xl font-bold text-gray-900">{isSales ? t('Sales, item by item') : t('Purchases, item by item')}</h2>
             <p className="text-sm text-gray-500">
               {isSales
-                ? 'Every line of every bill, for stock and GST review.'
-                : 'Every purchase line with supplier, invoice, cost and GST.'}
-              {!loading && ` ${rowCount.toLocaleString('en-IN')} lines.`}
+                ? t('Every line of every bill, for stock and GST review.')
+                : t('Every purchase line with supplier, invoice, cost and GST.')}
+              {!loading && ` ${t('{count} lines.', { count: rowCount.toLocaleString('en-IN') })}`}
             </p>
           </div>
           <button
@@ -316,32 +418,32 @@ export const Reports = () => {
             className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-white border border-gray-200 text-gray-700 font-semibold hover:bg-gray-50 transition-all"
           >
             <Download size={18} />
-            Export {isSales ? 'Sales' : 'Purchase'} CSV
+            {t('Export')} {isSales ? t('Sales') : t('Purchase')} {t('CSV')}
           </button>
         </div>
 
-        <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Report table">
+        <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={t('Report table')}>
           {isSales ? (
             <table className="w-full text-left">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className={headCell}>Bill No.</th>
-                  <th className={headCell}>Date & Time</th>
-                  <th className={headCell}>Customer</th>
-                  <th className={headCell}>Cashier</th>
-                  <th className={headCell}>Method</th>
-                  <th className={headCell}>Item</th>
-                  <th className={cn(headCell, 'text-right')}>Qty</th>
-                  <th className={cn(headCell, 'text-right')}>Base Price</th>
-                  <th className={cn(headCell, 'text-right')}>GST</th>
-                  <th className={cn(headCell, 'text-right')}>Total</th>
+                  <th className={headCell}>{t('Bill No.')}</th>
+                  <th className={headCell}>{t('Date & Time')}</th>
+                  <th className={headCell}>{t('Customer')}</th>
+                  <th className={headCell}>{t('Cashier')}</th>
+                  <th className={headCell}>{t('Method')}</th>
+                  <th className={headCell}>{t('Item')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('Qty')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('Base Price')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('GST')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('Total')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
-                  <tr><td colSpan={10} className="px-6 py-12 text-center text-gray-400">Loading report data...</td></tr>
+                  <tr><td colSpan={10} className="px-6 py-12 text-center text-gray-400">{t('Loading report data...')}</td></tr>
                 ) : filteredSalesRows.length === 0 ? (
-                  <tr><td colSpan={10} className="px-6 py-12 text-center text-gray-400">No sales records found.</td></tr>
+                  <tr><td colSpan={10} className="px-6 py-12 text-center text-gray-400">{t('No sales records found.')}</td></tr>
                 ) : (
                   filteredSalesRows.map((row, index) => (
                     <tr key={`${row.bill_id}-${row.item_id}-${index}`} className="hover:bg-gray-50 transition-colors">
@@ -349,12 +451,12 @@ export const Reports = () => {
                       <td className="px-6 py-4 text-sm text-gray-600 whitespace-nowrap">{formatDateTimeInIST(row.created_at)}</td>
                       <td className="px-6 py-4 text-sm text-gray-700">{billCustomerDisplayName(row)}</td>
                       <td className="px-6 py-4 text-sm text-gray-600">{row.cashier_name}</td>
-                      <td className="px-6 py-4 text-sm uppercase text-gray-600">{row.payment_method}</td>
+                      <td className="px-6 py-4 text-sm uppercase text-gray-600">{paymentLabel(row.payment_method)}</td>
                       <td className="px-6 py-4">
-                        <p className="font-semibold text-gray-900">{row.item_name}</p>
-                        <p className="text-xs text-gray-500">HSN: {row.hsn_code || 'Not set'}</p>
+                        <p className="font-semibold text-gray-900"><ItemName name={row.item_name} /></p>
+                        <p className="text-xs text-gray-500">{t('HSN:')} {row.hsn_code || t('Not set')}</p>
                       </td>
-                      <td className="px-6 py-4 text-right text-sm text-gray-700 whitespace-nowrap">{row.quantity} {row.metric}</td>
+                      <td className="px-6 py-4 text-right text-sm text-gray-700 whitespace-nowrap">{row.quantity} {unitLabel(row.metric)}</td>
                       <td className="px-6 py-4 text-right text-sm text-gray-700">{rupees(row.price)}</td>
                       <td className="px-6 py-4 text-right font-semibold text-orange-600">{rupees(row.sgst_amount + row.cgst_amount + (row.igst_amount || 0))}</td>
                       <td className="px-6 py-4 text-right font-bold text-gray-900">{rupees(row.total_amount)}</td>
@@ -367,24 +469,24 @@ export const Reports = () => {
             <table className="w-full text-left">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className={headCell}>Purchase No.</th>
-                  <th className={headCell}>Date & Time</th>
-                  <th className={headCell}>Supplier</th>
-                  <th className={headCell}>GSTIN</th>
-                  <th className={headCell}>Invoice</th>
-                  <th className={headCell}>Item</th>
-                  <th className={cn(headCell, 'text-right')}>Qty</th>
-                  <th className={cn(headCell, 'text-right')}>Unit Cost</th>
-                  <th className={headCell}>Created By</th>
-                  <th className={cn(headCell, 'text-right')}>GST</th>
-                  <th className={cn(headCell, 'text-right')}>Total</th>
+                  <th className={headCell}>{t('Purchase No.')}</th>
+                  <th className={headCell}>{t('Date & Time')}</th>
+                  <th className={headCell}>{t('Supplier')}</th>
+                  <th className={headCell}>{t('GSTIN')}</th>
+                  <th className={headCell}>{t('Invoice')}</th>
+                  <th className={headCell}>{t('Item')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('Qty')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('Unit Cost')}</th>
+                  <th className={headCell}>{t('Created By')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('GST')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('Total')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
-                  <tr><td colSpan={11} className="px-6 py-12 text-center text-gray-400">Loading report data...</td></tr>
+                  <tr><td colSpan={11} className="px-6 py-12 text-center text-gray-400">{t('Loading report data...')}</td></tr>
                 ) : filteredPurchaseRows.length === 0 ? (
-                  <tr><td colSpan={11} className="px-6 py-12 text-center text-gray-400">No purchase records found.</td></tr>
+                  <tr><td colSpan={11} className="px-6 py-12 text-center text-gray-400">{t('No purchase records found.')}</td></tr>
                 ) : (
                   filteredPurchaseRows.map((row, index) => (
                     <tr key={`${row.purchase_id}-${row.item_id}-${index}`} className="hover:bg-gray-50 transition-colors">
@@ -392,7 +494,7 @@ export const Reports = () => {
                       <td className="px-6 py-4 text-sm text-gray-600 whitespace-nowrap">{formatDateTimeInIST(row.created_at)}</td>
                       <td className="px-6 py-4">
                         <p className="font-semibold text-gray-900">{row.supplier_name}</p>
-                        <p className="text-xs text-gray-500">{row.supplier_phone || 'No phone'}</p>
+                        <p className="text-xs text-gray-500">{row.supplier_phone || t('No phone')}</p>
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-600">{row.supplier_gstin || 'N/A'}</td>
                       <td className="px-6 py-4 text-sm text-gray-600">
@@ -400,10 +502,10 @@ export const Reports = () => {
                         {row.invoice_date ? ` • ${formatDateInIST(row.invoice_date)}` : ''}
                       </td>
                       <td className="px-6 py-4">
-                        <p className="font-semibold text-gray-900">{row.item_name}</p>
-                        <p className="text-xs text-gray-500">HSN: {row.hsn_code || 'Not set'}</p>
+                        <p className="font-semibold text-gray-900"><ItemName name={row.item_name} /></p>
+                        <p className="text-xs text-gray-500">{t('HSN:')} {row.hsn_code || t('Not set')}</p>
                       </td>
-                      <td className="px-6 py-4 text-right text-sm text-gray-700 whitespace-nowrap">{row.quantity} {row.metric}</td>
+                      <td className="px-6 py-4 text-right text-sm text-gray-700 whitespace-nowrap">{row.quantity} {unitLabel(row.metric)}</td>
                       <td className="px-6 py-4 text-right text-sm text-gray-700">{rupees(row.unit_cost)}</td>
                       <td className="px-6 py-4 text-sm text-gray-600">{row.user_name}</td>
                       {/* IGST included: an inter-state purchase used to show no GST here. */}

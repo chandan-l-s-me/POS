@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { currentLocale } from '../i18n';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -28,8 +29,11 @@ function toDate(value: string | number | Date): Date {
   return new Date(value);
 }
 
-export function formatDateInIST(value: string | number | Date, options?: Intl.DateTimeFormatOptions) {
-  return new Intl.DateTimeFormat('en-GB', {
+// Dates on screen follow the app's language (month names in Kannada). Printed
+// and shared bills pass 'en-GB' as `locale` so they stay in English.
+
+export function formatDateInIST(value: string | number | Date, options?: Intl.DateTimeFormatOptions, locale = currentLocale()) {
+  return new Intl.DateTimeFormat(locale, {
     timeZone: IST_TIME_ZONE,
     day: '2-digit',
     month: 'short',
@@ -38,8 +42,8 @@ export function formatDateInIST(value: string | number | Date, options?: Intl.Da
   }).format(toDate(value));
 }
 
-export function formatDateTimeInIST(value: string | number | Date, options?: Intl.DateTimeFormatOptions) {
-  return new Intl.DateTimeFormat('en-GB', {
+export function formatDateTimeInIST(value: string | number | Date, options?: Intl.DateTimeFormatOptions, locale = currentLocale()) {
+  return new Intl.DateTimeFormat(locale, {
     timeZone: IST_TIME_ZONE,
     day: '2-digit',
     month: 'short',
@@ -69,7 +73,7 @@ export function formatDateTimeCompactInIST(value: string | number | Date) {
 export function formatISTDateKeyLabel(value: string) {
   const [year, month, day] = value.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
-  return new Intl.DateTimeFormat('en-GB', {
+  return new Intl.DateTimeFormat(currentLocale(), {
     timeZone: IST_TIME_ZONE,
     day: '2-digit',
     month: 'short',

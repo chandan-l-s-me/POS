@@ -12,6 +12,7 @@
  * disagree about what a customer is called. The server applies the same rule
  * in SQL for sorting and searching — see CUSTOMER_DISPLAY_SQL in server.ts.
  */
+import { t } from '../i18n';
 
 interface NamedCustomer {
   name?: string | null;
@@ -52,7 +53,7 @@ const billCustomer = (bill: BillCustomerFields): NamedCustomer => ({
 });
 
 /** A bill's customer as shown on screen and on the invoice. */
-export const billCustomerDisplayName = (bill: BillCustomerFields, walkInLabel = 'Walk-in'): string =>
+export const billCustomerDisplayName = (bill: BillCustomerFields, walkInLabel = t('Walk-in')): string =>
   customerDisplayName(billCustomer(bill)) || walkInLabel;
 
 export const billCustomerContactName = (bill: BillCustomerFields): string | null =>

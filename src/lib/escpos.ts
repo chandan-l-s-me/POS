@@ -77,7 +77,8 @@ export const receiptLines = (bill: Bill, settings: ShopSettings, paper: PaperWid
   out.push({ kind: 'rule' });
 
   text(pair(`Bill: ${bill.bill_number}`, '', width).trimEnd(), { bold: true });
-  text(formatDateTimeInIST(bill.created_at));
+  // English, like the rest of the printed receipt.
+  text(formatDateTimeInIST(bill.created_at, undefined, 'en-GB'));
   if (bill.cashier_name) text(`Cashier: ${ascii(bill.cashier_name)}`);
   const customer = (bill.customer_shop_name || '').trim() || (bill.customer_name || '').trim();
   if (customer) {

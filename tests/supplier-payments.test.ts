@@ -148,6 +148,26 @@ describe('paying a supplier', () => {
     assert.equal(done.data[0].methods, 'cash');
   });
 
+  it('lists each purchase’s payments by method, for the report', async () => {
+    const supplier = newSupplierName();
+    const purchase = await buy(supplier, 1000, { amount_paid: 300, payment_method: 'cash' });
+    assert.equal((await pay({ purchase_id: purchase.purchase_id, amount: 200, method: 'upi', reference: 'UTR77' })).status, 201);
+    assert.equal((await pay({ purchase_id: purchase.purchase_id, amount: 100 })).status, 201);
+
+    const listed = (await admin.get(`/api/purchases?search=${encodeURIComponent(supplier)}`)).body.data;
+    assert.equal(listed.length, 1);
+    const row = listed[0];
+    assert.equal(row.paid_cash, 300);
+    assert.equal(row.paid_upi, 200);
+    assert.equal(row.paid_bank, 0);
+    assert.equal(row.paid_cheque, 0);
+    assert.equal(row.paid_unrecorded, 100, 'paid without saying how');
+    assert.equal(row.amount_paid, 600);
+    assert.equal(row.balance_due, 400);
+    // The parts and what is owed make up the purchase.
+    assert.equal(row.paid_cash + row.paid_upi + row.paid_bank + row.paid_cheque + row.paid_unrecorded + row.balance_due, row.total_amount);
+  });
+
   it('can pay one chosen invoice instead', async () => {
     const supplier = newSupplierName();
     const oldest = await buy(supplier, 300, { invoice_date: '2026-01-05' });

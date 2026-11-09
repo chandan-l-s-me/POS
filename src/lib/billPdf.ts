@@ -1,4 +1,5 @@
 import React from 'react';
+import { t } from '../i18n';
 
 /**
  * A bill as a PDF that looks exactly like the printed one.
@@ -6,7 +7,7 @@ import React from 'react';
  * Renders the same Receipt component the counter prints (thermal or standard,
  * per Settings) off screen, captures it as an image and puts that on a PDF page
  * of the paper's size: 80 mm wide for a thermal receipt (as long as the bill),
- * A4 width for a standard invoice. Used to send the bill on WhatsApp.
+ * A5 width for a tax invoice. Used to send the bill on WhatsApp.
  *
  * The libraries are loaded only when a PDF is made, so they cost nothing until
  * someone shares a bill.
@@ -18,7 +19,11 @@ export interface BillPdf {
   fileName: string;
 }
 
-const PAPER_MM = { thermal: 80, standard: 210 } as const;
+/** Page width, and the margin either side of the bill on it. */
+const PAPER_MM = { thermal: 80, standard: 148 } as const;
+const MARGIN_MM = { thermal: 0, standard: 6 } as const;
+/** An A5 invoice is at least an A5 page tall. */
+const MIN_HEIGHT_MM = { thermal: 40, standard: 210 } as const;
 
 const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
@@ -38,14 +43,14 @@ export const makeBillPdf = async (
   const host = document.createElement('div');
   host.setAttribute('aria-hidden', 'true');
   Object.assign(host.style, {
-    position: 'fixed', left: '-10000px', top: '0', width: `${PAPER_MM[format]}mm`, background: '#ffffff', zIndex: '-1',
+    position: 'fixed', left: '-10000px', top: '0', width: `${PAPER_MM[format] - 2 * MARGIN_MM[format]}mm`, background: '#ffffff', zIndex: '-1',
   });
   document.body.appendChild(host);
   const root = createRoot(host);
 
   try {
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('The bill took too long to load.')), 15000);
+      const timeout = setTimeout(() => reject(new Error(t('The bill took too long to load.'))), 15000);
       root.render(
         React.createElement(Receipt, {
           billId,
@@ -60,7 +65,7 @@ export const makeBillPdf = async (
     await document.fonts?.ready;
 
     const paper = (host.querySelector('.receipt-paper') as HTMLElement | null) ?? (host.firstElementChild as HTMLElement);
-    if (!paper) throw new Error('Could not lay out the bill.');
+    if (!paper) throw new Error(t('Could not lay out the bill.'));
 
     const png = await toPng(paper, {
       // Sharp enough to read when zoomed in on a phone.
@@ -73,7 +78,10 @@ export const makeBillPdf = async (
 
     const { width: pxWidth, height: pxHeight } = paper.getBoundingClientRect();
     const widthMm = PAPER_MM[format];
-    const heightMm = Math.max(40, (widthMm * pxHeight) / pxWidth);
+    const margin = MARGIN_MM[format];
+    const imageWidthMm = widthMm - 2 * margin;
+    const imageHeightMm = (imageWidthMm * pxHeight) / pxWidth;
+    const heightMm = Math.max(MIN_HEIGHT_MM[format], imageHeightMm + 2 * margin);
     const pdf = new jsPDF({
       unit: 'mm',
       format: [widthMm, heightMm],
@@ -81,7 +89,7 @@ export const makeBillPdf = async (
       compress: true,
     });
     pdf.setProperties({ title: `Bill ${billNumber}` });
-    pdf.addImage(png, 'PNG', 0, 0, widthMm, heightMm, undefined, 'FAST');
+    pdf.addImage(png, 'PNG', margin, margin, imageWidthMm, imageHeightMm, undefined, 'FAST');
 
     const blob = pdf.output('blob');
     const base64 = pdf.output('datauristring').split(',')[1] ?? '';

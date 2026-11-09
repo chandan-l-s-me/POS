@@ -505,8 +505,98 @@ html.dark select option {
 .receipt-paper .border-gray-200 { border-color: #000000 !important; }
 
 @media print {
+  /* Paper is white, whatever the app's theme behind the bill. */
+  html, body { background: #ffffff !important; }
   .receipt-paper { background-color: #ffffff !important; color: #000000 !important; }
 }
+
+/* ------------------------------------------------------------ Kannada --- */
+/* Kannada letters join into one another; the letter spacing small headings
+   use in English pulls them apart ("ಅ ಡ್ಮಿ ನ್"). <html lang> follows the
+   language chosen (App.tsx). */
+html[lang='kn'] [class*='tracking-'] {
+  letter-spacing: normal;
+}
+
+/* ------------------------------------------------------ A5 tax invoice --- */
+/* The "standard" bill: a GST tax invoice laid out for A5 paper (148 x 210 mm,
+   printed with 6 mm margins, so 136 mm of width). Plain CSS rather than
+   utility classes so the ruling of the boxes reads in one place. */
+
+.invoice-a5 {
+  width: 100%;
+  max-width: 136mm;
+  margin: 0 auto;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 8px;
+  line-height: 1.3;
+  color: #000;
+  background: #fff;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.invoice-a5 p { margin: 0; }
+.invoice-a5 strong,
+.invoice-a5__strong { font-weight: 700; }
+.invoice-a5 .num { text-align: right; }
+
+.invoice-a5__title { text-align: center; font-size: 11px; font-weight: 700; margin-bottom: 2px !important; }
+.invoice-a5__box { border: 1px solid #000; }
+.invoice-a5__label { font-size: 7.5px; }
+.invoice-a5__value { font-weight: 700; font-size: 8.5px; }
+.invoice-a5__underline { text-decoration: underline; }
+
+.invoice-a5__head { display: grid; grid-template-columns: 1.15fr 1fr; border-bottom: 1px solid #000; }
+.invoice-a5__parties { border-right: 1px solid #000; }
+.invoice-a5__party { padding: 3px 4px; }
+.invoice-a5__party + .invoice-a5__party { border-top: 1px solid #000; }
+.invoice-a5__shop { font-size: 10.5px; font-weight: 700; }
+.invoice-a5__buyer { font-size: 9px; font-weight: 700; text-transform: uppercase; }
+/* The last row takes up the slack, so the centre rule runs to the bottom. */
+.invoice-a5__meta { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto 1fr; }
+.invoice-a5__meta > div { padding: 2px 4px; min-height: 8mm; border-bottom: 1px solid #000; }
+.invoice-a5__meta > div:nth-child(odd) { border-right: 1px solid #000; }
+.invoice-a5__meta > div:nth-last-child(-n + 2) { border-bottom: 0; }
+
+.invoice-a5 table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.invoice-a5 th { font-weight: 400; font-size: 7.5px; text-align: center; vertical-align: middle; }
+.invoice-a5 th,
+.invoice-a5 td { padding: 1px 3px; overflow-wrap: anywhere; }
+.invoice-a5 tr { break-inside: avoid; }
+
+/* Items: column rules only, as on a ledger. */
+.invoice-a5__items th { border: 1px solid #000; border-top: 0; }
+.invoice-a5__items td { border-left: 1px solid #000; border-right: 1px solid #000; vertical-align: top; font-size: 8.5px; }
+.invoice-a5__items th:first-child,
+.invoice-a5__items td:first-child { border-left: 0; }
+.invoice-a5__items th:last-child,
+.invoice-a5__items td:last-child { border-right: 0; }
+.invoice-a5__items tbody tr:first-child td { padding-top: 3px; }
+.invoice-a5__item { font-weight: 700; }
+.invoice-a5__subtotal td { padding-top: 6px; }
+.invoice-a5__subtotal td:last-child { border-top: 1px solid #000; }
+.invoice-a5__charge { text-align: right; font-style: italic; font-weight: 700; }
+.invoice-a5__less { float: left; font-weight: 400; }
+.invoice-a5__items tfoot td { border-top: 1px solid #000; border-bottom: 1px solid #000; font-size: 8.5px; }
+.invoice-a5__grand { font-size: 10px !important; font-weight: 700; white-space: nowrap; }
+
+.invoice-a5__words { padding: 2px 4px; border-bottom: 1px solid #000; }
+.invoice-a5__words .invoice-a5__strong { font-size: 9px; }
+.invoice-a5__row { display: flex; justify-content: space-between; gap: 8px; }
+
+/* HSN-wise tax summary: fully ruled. */
+.invoice-a5__tax th,
+.invoice-a5__tax td { border: 1px solid #000; font-size: 7.5px; }
+.invoice-a5__tax tr > :first-child { border-left: 0; }
+.invoice-a5__tax tr > :last-child { border-right: 0; }
+.invoice-a5__tax thead tr:first-child th { border-top: 0; }
+.invoice-a5__tax tfoot td { font-weight: 700; }
+
+.invoice-a5__taxwords { padding: 3px 4px; border-top: 1px solid #000; }
+.invoice-a5__foot { display: grid; grid-template-columns: 1.15fr 1fr; border-top: 1px solid #000; break-inside: avoid; }
+.invoice-a5__foot > div { padding: 3px 4px; }
+.invoice-a5__sign { display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; min-height: 15mm; border-left: 1px solid #000; }
+.invoice-a5__generated { text-align: center; font-size: 7.5px; margin-top: 2px !important; }
 
 /* A table inside a sideways-scrolling box keeps a usable width and scrolls,
    rather than squeezing every column until each cell wraps onto several

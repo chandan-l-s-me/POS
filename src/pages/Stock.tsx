@@ -7,14 +7,16 @@ import { useAuthStore } from '../store/useAuthStore';
 import { useDataStore } from '../store/useDataStore';
 import { formatRupees } from '../lib/supplierPayments';
 import { cn, formatDateInIST, getISTTimestampForFileName } from '../lib/utils';
+import { t, tn, unitLabel, withEnglish } from '../i18n';
+import { ItemName } from '../components/ItemName';
 
 type Filter = 'all' | StockStatus;
 type Sort = 'name' | 'quantity' | 'days_left' | 'value';
 
 const STATUS: Record<StockStatus, { label: string; chip: string }> = {
-  in: { label: 'In stock', chip: 'bg-emerald-50 text-emerald-700' },
-  low: { label: 'Low stock', chip: 'bg-amber-50 text-amber-700' },
-  out: { label: 'Out of stock', chip: 'bg-red-50 text-red-700' },
+  in: { get label() { return t('In stock'); }, chip: 'bg-emerald-50 text-emerald-700' },
+  low: { get label() { return t('Low stock'); }, chip: 'bg-amber-50 text-amber-700' },
+  out: { get label() { return t('Out of stock'); }, chip: 'bg-red-50 text-red-700' },
 };
 
 /** Worst first when sorting by quantity: out, then low, then the rest. */
@@ -107,20 +109,20 @@ export const Stock = () => {
 
   const cards: Array<{ filter: Filter; label: string; value: string; note: string; icon: React.ElementType; tone: string }> = summary ? [
     {
-      filter: 'in', label: 'In stock', value: qty(summary.in_stock), icon: PackageCheck, tone: 'emerald',
-      note: `of ${qty(summary.item_count)} items`,
+      filter: 'in', label: t('In stock'), value: qty(summary.in_stock), icon: PackageCheck, tone: 'emerald',
+      note: t('of {count} items', { count: qty(summary.item_count) }),
     },
     {
-      filter: 'low', label: 'Low stock', value: qty(summary.low_stock), icon: AlertTriangle, tone: 'amber',
-      note: `${qty(threshold)} or fewer left`,
+      filter: 'low', label: t('Low stock'), value: qty(summary.low_stock), icon: AlertTriangle, tone: 'amber',
+      note: t('{count} or fewer left', { count: qty(threshold) }),
     },
     {
-      filter: 'out', label: 'Out of stock', value: qty(summary.out_of_stock), icon: PackageX, tone: 'red',
-      note: 'nothing left to sell',
+      filter: 'out', label: t('Out of stock'), value: qty(summary.out_of_stock), icon: PackageX, tone: 'red',
+      note: t('nothing left to sell'),
     },
     {
-      filter: 'all', label: 'Stock value', value: formatRupees(summary.value_at_price), icon: Boxes, tone: 'sky',
-      note: isAdmin && summary.value_at_cost != null ? `at selling price; ${formatRupees(summary.value_at_cost)} at cost` : 'at selling price',
+      filter: 'all', label: t('Stock value'), value: formatRupees(summary.value_at_price), icon: Boxes, tone: 'sky',
+      note: isAdmin && summary.value_at_cost != null ? t('at selling price; {cost} at cost', { cost: formatRupees(summary.value_at_cost) }) : t('at selling price'),
     },
   ] : [];
 
@@ -132,20 +134,19 @@ export const Stock = () => {
   };
 
   const tabs: Array<{ value: Filter; label: string; count?: number }> = [
-    { value: 'all', label: 'All items', count: summary?.item_count },
-    { value: 'in', label: 'In stock', count: summary?.in_stock },
-    { value: 'low', label: 'Low stock', count: summary?.low_stock },
-    { value: 'out', label: 'Out of stock', count: summary?.out_of_stock },
+    { value: 'all', label: t('All items'), count: summary?.item_count },
+    { value: 'in', label: t('In stock'), count: summary?.in_stock },
+    { value: 'low', label: t('Low stock'), count: summary?.low_stock },
+    { value: 'out', label: t('Out of stock'), count: summary?.out_of_stock },
   ];
 
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-6 2xl:px-8 py-6 border-b border-gray-100 bg-gradient-to-r from-emerald-50 to-sky-50">
-          <h1 className="text-2xl font-bold text-gray-900">Stock</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('Stock')}</h1>
           <p className="text-sm text-gray-600 mt-1">
-            Everything on the shelf. Low stock is {qty(threshold)} or fewer left. “Lasts” is how long the stock will last at
-            the rate it sold over the last {windowDays} days. Click an item to see its batches.
+            {t('Everything on the shelf. Low stock is {threshold} or fewer left. “Lasts” is how long the stock will last at the rate it sold over the last {windowDays} days. Click an item to see its batches.', { threshold: qty(threshold), windowDays })}
           </p>
         </div>
         <div className="grid gap-4 p-6 2xl:px-8 sm:grid-cols-2 xl:grid-cols-4">
@@ -199,28 +200,28 @@ export const Stock = () => {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search item or HSN"
+              placeholder={t('Search item or HSN')}
               className="w-full pl-11 pr-4 py-2.5 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
             />
           </div>
           <select
-            aria-label="Sort by"
+            aria-label={t('Sort by')}
             value={sort}
             onChange={(e) => setSort(e.target.value as Sort)}
             className="px-4 py-2.5 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm font-semibold text-gray-700"
           >
-            <option value="name">Sort: Name</option>
-            <option value="quantity">Sort: Least stock first</option>
-            <option value="days_left">Sort: Running out soonest</option>
-            <option value="value">Sort: Highest value</option>
+            <option value="name">{t('Sort: Name')}</option>
+            <option value="quantity">{t('Sort: Least stock first')}</option>
+            <option value="days_left">{t('Sort: Running out soonest')}</option>
+            <option value="value">{t('Sort: Highest value')}</option>
           </select>
           <button
-            onClick={handleExport}
+            onClick={() => withEnglish(handleExport)}
             disabled={visible.length === 0}
             className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-600 font-bold rounded-2xl hover:bg-gray-50 transition-all disabled:opacity-50 disabled:pointer-events-none"
           >
             <Download size={18} />
-            Export CSV
+            {t('Export CSV')}
           </button>
         </div>
       </div>
@@ -234,23 +235,23 @@ export const Stock = () => {
           <table className="w-full text-left">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">Item</th>
-                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">Status</th>
-                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right">In Stock</th>
-                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right">Sells At</th>
-                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right">Value</th>
-                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right" title={`Units sold in the last ${windowDays} days`}>Sold {windowDays}d</th>
-                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">Lasts</th>
-                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">Last Bought / Sold</th>
+                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">{t('Item')}</th>
+                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">{t('Status')}</th>
+                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('In Stock')}</th>
+                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Sells At')}</th>
+                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Value')}</th>
+                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right" title={t('Units sold in the last {windowDays} days', { windowDays })}>{t('Sold {windowDays}', { windowDays })}d</th>
+                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">{t('Lasts')}</th>
+                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">{t('Last Bought / Sold')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {loading ? (
-                <tr><td colSpan={8} className="px-6 py-12 text-center text-gray-400">Loading stock…</td></tr>
+                <tr><td colSpan={8} className="px-6 py-12 text-center text-gray-400">{t('Loading stock…')}</td></tr>
               ) : visible.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-6 py-12 text-center text-gray-400">
-                    {filter === 'low' ? 'No item is running low.' : filter === 'out' ? 'Nothing is out of stock.' : 'No items match.'}
+                    {filter === 'low' ? t('No item is running low.') : filter === 'out' ? t('Nothing is out of stock.') : t('No items match.')}
                   </td>
                 </tr>
               ) : visible.map((item) => (
@@ -264,8 +265,8 @@ export const Stock = () => {
                   )}
                 >
                   <td className="px-4 py-3 min-w-[14rem]">
-                    <p className="font-bold text-gray-900">{item.name}</p>
-                    <p className="text-xs text-gray-400">HSN {item.hsn_code || '—'}</p>
+                    <p className="font-bold text-gray-900"><ItemName name={item.name} /></p>
+                    <p className="text-xs text-gray-400">{t('HSN {value}', { value: item.hsn_code || '—' })}</p>
                   </td>
                   <td className="px-4 py-3">
                     <span className={cn('text-xs font-bold px-2 py-1 rounded-full whitespace-nowrap', STATUS[item.status].chip)}>
@@ -276,39 +277,39 @@ export const Stock = () => {
                     <span className={cn('font-black', item.status === 'out' ? 'text-red-600' : item.status === 'low' ? 'text-amber-700' : 'text-gray-900')}>
                       {qty(item.stock_quantity)}
                     </span>{' '}
-                    <span className="text-xs text-gray-400">{item.metric}</span>
-                    {item.batch_count > 1 && <p className="text-xs text-gray-400">{item.batch_count} batches</p>}
+                    <span className="text-xs text-gray-400">{unitLabel(item.metric)}</span>
+                    {item.batch_count > 1 && <p className="text-xs text-gray-400">{t('{batch_count} batches', { batch_count: item.batch_count })}</p>}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums">
                     <p className="font-semibold text-gray-900">{formatRupees(item.price)}</p>
-                    {item.price_count > 1 && <p className="text-xs text-gray-400 whitespace-nowrap">+ other prices</p>}
+                    {item.price_count > 1 && <p className="text-xs text-gray-400 whitespace-nowrap">{t('+ other prices')}</p>}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums">
                     <p className="font-semibold text-gray-900">{item.stock_quantity > 0 ? formatRupees(item.value_at_price) : '—'}</p>
                     {isAdmin && item.stock_quantity > 0 && item.value_at_cost != null && (
-                      <p className="text-xs text-gray-400 whitespace-nowrap" title={item.uncosted_batches ? 'Some stock has no recorded cost' : undefined}>
-                        {formatRupees(item.value_at_cost)} at cost{item.uncosted_batches ? '*' : ''}
+                      <p className="text-xs text-gray-400 whitespace-nowrap" title={item.uncosted_batches ? t('Some stock has no recorded cost') : undefined}>
+                        {t('{amount} at cost', { amount: formatRupees(item.value_at_cost) })}{item.uncosted_batches ? '*' : ''}
                       </p>
                     )}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums text-gray-600">{item.sold_recent > 0 ? qty(item.sold_recent) : '—'}</td>
                   <td className="px-4 py-3 whitespace-nowrap">
                     {item.status === 'out' ? (
-                      <span className="text-xs font-bold text-red-600">Sold out</span>
+                      <span className="text-xs font-bold text-red-600">{t('Sold out')}</span>
                     ) : item.days_left == null ? (
-                      <span className="text-xs text-gray-400">No recent sales</span>
+                      <span className="text-xs text-gray-400">{t('No recent sales')}</span>
                     ) : (
                       <span className={cn(
                         'text-xs font-bold px-2 py-1 rounded-full',
                         item.days_left < RUNNING_OUT_DAYS ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-gray-600'
                       )}>
-                        ~{qty(item.days_left)} day{item.days_left === 1 ? '' : 's'}
+                        ~{tn(item.days_left, '1 day', '{count} days', { count: qty(item.days_left) })}
                       </span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
-                    <p><span className="text-gray-400">Bought</span> {item.last_purchased_at ? formatDateInIST(item.last_purchased_at) : '—'}</p>
-                    <p><span className="text-gray-400">Sold</span> {item.last_sold_at ? formatDateInIST(item.last_sold_at) : 'never'}</p>
+                    <p><span className="text-gray-400">{t('Bought')}</span> {item.last_purchased_at ? formatDateInIST(item.last_purchased_at) : '—'}</p>
+                    <p><span className="text-gray-400">{t('Sold')}</span> {item.last_sold_at ? formatDateInIST(item.last_sold_at) : t('never')}</p>
                   </td>
                 </tr>
               ))}
@@ -317,9 +318,9 @@ export const Stock = () => {
         </div>
         {!loading && visible.length > 0 && (
           <p className="border-t border-gray-100 px-6 py-3 text-sm text-gray-500">
-            {visible.length} item{visible.length === 1 ? '' : 's'}
-            {filter !== 'all' ? ` · ${STATUS[filter].label.toLowerCase()}` : ''}
-            {' · '}worth {formatRupees(visible.reduce((acc, item) => acc + item.value_at_price, 0))} at selling price
+            {tn(visible.length, '1 item', '{count} items')}
+            {filter !== 'all' ? ` · ${STATUS[filter].label}` : ''}
+            {' · '}{t('worth {rupees} at selling price', { rupees: formatRupees(visible.reduce((acc, item) => acc + item.value_at_price, 0)) })}
           </p>
         )}
       </div>

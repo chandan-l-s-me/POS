@@ -67,6 +67,13 @@ Records of each run go to `%TEMP%\VyaparaBilling-install.log` (and `-update`,
 The Cloudflare tunnel is not part of the installer: it needs the shop's own
 Cloudflare account and token (see *Remote access* below).
 
+**Give the shop the zip, not this repository.** `installer/` in the source tree
+holds only the scripts; the app, Node and the service wrapper exist only in
+the built package, which is not committed (`release/` is git-ignored). Run from
+a clone, `Install Vyapara.bat` stops and says where to get the package. Publish
+each build as a GitHub Release: Releases > *Draft a new release*, tag it with
+the version (e.g. `v1.0.0`), and attach `release/VyaparaBilling-<version>.zip`.
+
 ---
 
 ## Configuration
@@ -82,6 +89,28 @@ four that matter for a real deployment:
 - **`DB_PATH`** — where the SQLite file lives. Put it somewhere your backups
   cover, not inside the application directory.
 - **`HOST`** — defaults to `127.0.0.1`, which is the safe choice. See below.
+
+### Kannada
+
+Every screen can be shown in Kannada: the **EN | ಕನ್ನಡ** switch in the top bar,
+on the sign-in screen and in Quick Bill's ⚙ settings. Each computer or phone
+keeps its own choice. Printed and shared bills, CSV exports and the activity
+log's details stay in English. The screen text lives in `src/i18n/kn.ts`,
+looked up by the English; `tests/i18n.test.ts` fails if any is missing.
+
+Items are still typed and searched in English. Their Kannada names come from
+Google Translate, filled in by the server in the background a few seconds
+after an item is added or renamed. An admin can correct one under Items →
+Edit, and Settings → Language shows how many are still waiting. Without
+internet the names stay English until the next attempt. Only item names are
+sent to Google.
+
+- **`GOOGLE_TRANSLATE_API_KEY`** — optional. Uses Google's paid Cloud
+  Translation API. Without it, the free endpoint behind Google's web widgets
+  is used: no key or cost, but not an official service, so Google may slow it
+  down or change it.
+- **`TRANSLATE_ITEM_NAMES=off`** — never contact Google; items then show in
+  English on Kannada screens unless a Kannada name is typed in.
 
 ### Exposing it to other tills
 

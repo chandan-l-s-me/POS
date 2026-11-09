@@ -168,7 +168,7 @@ describe('what the till shows is what the ledger records', () => {
     // The per-paisa rounding paths are where the two implementations can drift,
     // so sweep them rather than trusting a handful of hand-picked numbers.
     const prices = [1, 1.01, 7.77, 9.99, 33.33, 99.95, 100, 123.45, 287.77, 999.99];
-    const rates: Array<[number, 'split' | 'igst']> = [[0, 'split'], [5, 'split'], [12, 'split'], [18, 'split'], [28, 'split'], [18, 'igst'], [28, 'igst']];
+    const rates: Array<[number, 'split' | 'igst']> = [[0, 'split'], [5, 'split'], [12, 'split'], [18, 'split'], [28, 'split'], [40, 'split'], [18, 'igst'], [28, 'igst'], [40, 'igst']];
     const quantities = [1, 2, 3, 7, 13, 0.5, 1.25, 2.75];
 
     const built: Array<{ item: Item; quantity: number }> = [];

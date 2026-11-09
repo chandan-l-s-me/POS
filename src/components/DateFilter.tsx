@@ -1,6 +1,7 @@
 import { Calendar, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { formatDay } from '../lib/supplierPayments';
+import { t } from '../i18n';
 
 /**
  * The "Filter by Date" button and the From / To panel it opens, shared by the
@@ -25,7 +26,7 @@ export const DateFilterButton = ({ from, to, open, onClick }: {
       )}
     >
       <Calendar size={20} />
-      {active ? `${from ? formatDay(from) : 'Start'} – ${to ? formatDay(to) : 'Today'}` : 'Filter by Date'}
+      {active ? `${from ? formatDay(from) : t('Start')} – ${to ? formatDay(to) : t('Today')}` : t('Filter by Date')}
     </button>
   );
 };
@@ -40,7 +41,7 @@ export const DateFilterPanel = ({ from, to, onFromChange, onToChange, descriptio
   <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6">
     <div className="flex items-center justify-between gap-4 mb-4">
       <div>
-        <h2 className="text-lg font-bold text-gray-900">Filter By Date</h2>
+        <h2 className="text-lg font-bold text-gray-900">{t('Filter By Date')}</h2>
         {description && <p className="text-sm text-gray-500">{description}</p>}
       </div>
       {(from || to) && (
@@ -49,13 +50,13 @@ export const DateFilterPanel = ({ from, to, onFromChange, onToChange, descriptio
           onClick={() => { onFromChange(''); onToChange(''); }}
           className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-gray-100 text-gray-700 font-semibold hover:bg-gray-200 transition-all"
         >
-          <X size={16} /> Clear Filter
+          <X size={16} /> {t('Clear Filter')}
         </button>
       )}
     </div>
     <div className="grid gap-4 md:grid-cols-2">
       <label className="space-y-2">
-        <span className="text-sm font-semibold text-gray-700">From Date</span>
+        <span className="text-sm font-semibold text-gray-700">{t('From Date')}</span>
         <input
           type="date"
           value={from}
@@ -65,7 +66,7 @@ export const DateFilterPanel = ({ from, to, onFromChange, onToChange, descriptio
         />
       </label>
       <label className="space-y-2">
-        <span className="text-sm font-semibold text-gray-700">To Date</span>
+        <span className="text-sm font-semibold text-gray-700">{t('To Date')}</span>
         <input
           type="date"
           value={to}

@@ -5,6 +5,7 @@ import { useAuthStore } from '../store/useAuthStore';
 import { useDataStore } from '../store/useDataStore';
 import { useThemeStore } from '../store/useThemeStore';
 import { cn } from '../lib/utils';
+import { t } from '../i18n';
 
 /**
  * Who is signed in, at the top right of every screen: their name and role, the
@@ -43,7 +44,7 @@ export const ProfileMenu = () => {
   if (!user) return null;
 
   const initial = user.name?.trim()[0]?.toUpperCase() || '?';
-  const role = user.role === 'admin' ? 'Admin' : 'Cashier';
+  const role = user.role === 'admin' ? t('Admin') : t('Cashier');
   const itemClass = 'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-colors';
 
   const signOut = () => {
@@ -62,7 +63,7 @@ export const ProfileMenu = () => {
       >
         {/* Spoken first; the visible name and role follow, so what a screen
             reader says includes what is on screen. */}
-        <span className="sr-only">Profile menu: </span>
+        <span className="sr-only">{t('Profile menu:')} </span>
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-100 text-sm font-bold text-orange-600">
           {initial}
         </span>
@@ -91,8 +92,8 @@ export const ProfileMenu = () => {
             )}>
               {role}
             </span>
-            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">{stats.items} items</span>
-            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">{stats.customers} customers</span>
+            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">{t('{items} items', { items: stats.items })}</span>
+            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">{t('{customers} customers', { customers: stats.customers })}</span>
           </div>
           <div className="space-y-0.5 border-t border-gray-100 pt-1.5">
             {/* Stays open on toggle, so the change can be seen and undone. */}
@@ -104,18 +105,18 @@ export const ProfileMenu = () => {
               className={cn(itemClass, 'text-gray-700 hover:bg-gray-100')}
             >
               {theme === 'dark' ? <Moon size={18} /> : <Sun size={18} />}
-              Dark mode
+              {t('Dark mode')}
               <span className={cn('relative ml-auto h-5 w-9 shrink-0 rounded-full transition-colors', theme === 'dark' ? 'bg-orange-600' : 'bg-gray-300')}>
                 <span className={cn('absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all', theme === 'dark' ? 'left-[18px]' : 'left-0.5')} />
               </span>
             </button>
             {user.role === 'admin' && (
               <button type="button" role="menuitem" onClick={() => navigate('/settings#account')} className={cn(itemClass, 'text-gray-700 hover:bg-gray-100')}>
-                <UserCog size={18} /> My account
+                <UserCog size={18} /> {t('My account')}
               </button>
             )}
             <button type="button" role="menuitem" onClick={signOut} className={cn(itemClass, 'text-red-600 hover:bg-red-50')}>
-              <LogOut size={18} /> Sign out
+              <LogOut size={18} /> {t('Sign out')}
             </button>
           </div>
         </div>

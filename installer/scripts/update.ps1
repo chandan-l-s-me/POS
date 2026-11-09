@@ -13,6 +13,7 @@ param(
 )
 
 . (Join-Path $PSScriptRoot 'common.ps1')
+Assert-Package -Quiet:$Quiet
 if (Invoke-Elevated $PSCommandPath $PSBoundParameters) { return }
 if (-not $InstallDir) { $InstallDir = $DefaultInstallDir }
 if (-not $LogFile) { $LogFile = Join-Path $env:TEMP 'VyaparaBilling-update.log' }

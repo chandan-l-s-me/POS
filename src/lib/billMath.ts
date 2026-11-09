@@ -17,6 +17,13 @@ export const round2 = (value: number) => Math.round((value + Number.EPSILON) * 1
 /** Quantity: loose goods are sold by weight, so keep three decimals (grams). */
 export const round3 = (value: number) => Math.round((value + Number.EPSILON) * 1000) / 1000;
 
+/**
+ * The GST slabs offered when setting up an item or a purchase line. A split
+ * slab is charged half as CGST and half as SGST (40% = 20% + 20%). 12% and 28%
+ * stay for older stock and suppliers still billing at them.
+ */
+export const GST_SLABS = [0, 5, 12, 18, 28, 40] as const;
+
 /** The tax fields of an item. SQLite hands booleans back as 0/1. */
 export interface TaxableItem {
   gst_applicable: boolean | number;

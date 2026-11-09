@@ -8,11 +8,13 @@ import { Item, Purchase, Supplier } from '../types';
 import { useAuthStore } from '../store/useAuthStore';
 import { useDataStore } from '../store/useDataStore';
 import { formatDateTimeInIST, cn } from '../lib/utils';
-import { round2, saleGstRate, type TaxableItem } from '../lib/billMath';
+import { GST_SLABS, round2, saleGstRate, type TaxableItem } from '../lib/billMath';
 import { UNIT_OPTIONS } from '../lib/units';
 import { HEADER_NOTE, ROW_FIELD, TABLE_HEAD_ROW } from '../lib/entryStyles';
 import { useAnchoredMenu } from '../hooks/useAnchoredMenu';
 import { PAYMENT_METHOD_OPTIONS } from '../lib/supplierPayments';
+import { t, unitLabel } from '../i18n';
+import { ItemName } from '../components/ItemName';
 
 /**
  * How this purchase is being paid. On credit by default: forgetting to mark a
@@ -104,9 +106,9 @@ const isNewItemRow = (row: PurchaseRowState) => !row.item_id && row.item_query.t
  * type, so it is always `split:0`.
  */
 const GST_CHOICES: { value: string; label: string }[] = [
-  { value: 'split:0', label: 'No GST' },
-  ...[5, 12, 18, 28].map((rate) => ({ value: `split:${rate}`, label: `GST ${rate}%` })),
-  ...[5, 12, 18, 28].map((rate) => ({ value: `igst:${rate}`, label: `IGST ${rate}%` })),
+  { value: 'split:0', get label() { return t('No GST'); } },
+  ...GST_SLABS.filter((rate) => rate > 0).map((rate) => ({ value: `split:${rate}`, label: t('GST {rate}%', { rate }) })),
+  ...GST_SLABS.filter((rate) => rate > 0).map((rate) => ({ value: `igst:${rate}`, label: t('IGST {rate}%', { rate }) })),
 ];
 
 const gstChoiceOf = (row: Pick<PurchaseRowState, 'gst_mode' | 'gst_percent'>) =>
@@ -272,7 +274,7 @@ export const Purchases = () => {
         setPurchases(purchaseData);
         setPurchaseRows(purchaseItemData);
         if (!Array.isArray(supplierData)) {
-          throw new Error('Suppliers response is invalid. Please restart the app server and try again.');
+          throw new Error(t('Suppliers response is invalid. Please restart the app server and try again.'));
         }
 
         setSuppliers(
@@ -287,7 +289,7 @@ export const Purchases = () => {
       })
       .catch((err) => {
         console.error('Failed to fetch purchase context:', err);
-        alert(`Failed to load purchase data: ${err.message}`);
+        alert(t('Failed to load purchase data: {message}', { message: err.message }));
       })
       .finally(() => setLoading(false));
   }, []);
@@ -339,13 +341,15 @@ export const Purchases = () => {
         min="0"
         step="0.01"
         value={typed ? row.cost || '' : derived > 0 ? round2(derived) : ''}
-        aria-label={`Cost per unit ${basis === 'before_gst' ? 'before' : 'after'} GST`}
+        aria-label={basis === 'before_gst' ? t('Cost per unit before GST') : t('Cost per unit after GST')}
         onChange={(e) => upsertRow(rowIndex, { cost: e.target.value === '' ? 0 : Number(e.target.value), cost_basis: basis })}
         onKeyDown={enterAdvances}
         title={
           typed || !(row.cost > 0)
-            ? `Cost per unit ${basis === 'before_gst' ? 'before' : 'after'} GST`
-            : `Worked out from the cost ${basis === 'before_gst' ? 'after' : 'before'} GST — type here to enter this one instead`
+            ? (basis === 'before_gst' ? t('Cost per unit before GST') : t('Cost per unit after GST'))
+            : basis === 'before_gst'
+              ? t('Worked out from the cost after GST — type here to enter this one instead')
+              : t('Worked out from the cost before GST — type here to enter this one instead')
         }
         className={cn(ROW_FIELD, 'text-right tabular-nums', !typed && 'text-gray-500')}
       />
@@ -445,7 +449,7 @@ export const Purchases = () => {
 
   const draftStarted = !isDraftEmpty(usePurchaseDraft());
   const clearDraft = () => {
-    if (draftStarted && !window.confirm('Clear this purchase? Everything entered here will be removed.')) return;
+    if (draftStarted && !window.confirm(t('Clear this purchase? Everything entered here will be removed.'))) return;
     resetForm();
   };
 
@@ -498,12 +502,12 @@ export const Purchases = () => {
     event.preventDefault();
 
     if (!form.supplier_name.trim()) {
-      alert('Supplier name is required.');
+      alert(t('Supplier name is required.'));
       return;
     }
 
     if (filledRows.length === 0) {
-      alert('Enter at least one valid purchase row.');
+      alert(t('Enter at least one valid purchase row.'));
       return;
     }
 
@@ -512,7 +516,7 @@ export const Purchases = () => {
     // A new item needs what the catalogue needs: an HSN code and a unit.
     const incomplete = filledRows.filter((row) => isNewItemRow(row) && (!row.hsn_code.trim() || !row.metric));
     if (incomplete.length > 0) {
-      alert(`Enter the HSN code and unit for the new item: ${incomplete.map((row) => row.item_query.trim()).join(', ')}.`);
+      alert(t('Enter the HSN code and unit for the new item: {value}.', { value: incomplete.map((row) => row.item_query.trim()).join(', ') }));
       return;
     }
     // Typed a name that is already in the catalogue without picking it.
@@ -520,20 +524,20 @@ export const Purchases = () => {
       (row) => isNewItemRow(row) && items.some((item) => item.name.trim().toLowerCase() === row.item_query.trim().toLowerCase())
     );
     if (existing.length > 0) {
-      alert(`Already an item — pick it from the list: ${existing.map((row) => row.item_query.trim()).join(', ')}.`);
+      alert(t('Already an item — pick it from the list: {value}.', { value: existing.map((row) => row.item_query.trim()).join(', ') }));
       return;
     }
     const newNames = filledRows.filter(isNewItemRow).map((row) => row.item_query.trim().toLowerCase());
     const twice = newNames.find((name, index) => newNames.indexOf(name) !== index);
     if (twice) {
-      alert(`"${twice}" is entered twice as a new item. Enter it once.`);
+      alert(t('"{twice}" is entered twice as a new item. Enter it once.', { twice }));
       return;
     }
 
     const unpriced = filledRows.filter((row) => !(row.selling_price > 0));
     if (unpriced.length > 0) {
       alert(
-        `Enter the selling price for: ${unpriced.map((row) => row.item_query).join(', ')}.`
+        t('Enter the selling price for: {value}.', { value: unpriced.map((row) => row.item_query).join(', ') })
       );
       return;
     }
@@ -541,7 +545,7 @@ export const Purchases = () => {
     const grandTotal = round2(totals.total);
     const partAmount = round2(Number(payment.amount) || 0);
     if (payment.mode === 'part' && !(partAmount > 0 && partAmount < grandTotal)) {
-      alert(`Enter the amount paid now — more than 0 and less than the total of Rs. ${grandTotal.toFixed(2)}.`);
+      alert(t('Enter the amount paid now — more than 0 and less than the total of Rs. {value}.', { value: grandTotal.toFixed(2) }));
       return;
     }
     const amountPaid = payment.mode === 'full' ? grandTotal : payment.mode === 'part' ? partAmount : 0;
@@ -592,7 +596,7 @@ export const Purchases = () => {
       ]);
 
       if (!Array.isArray(latestSuppliers)) {
-        throw new Error('Suppliers response is invalid. Please restart the app server and try again.');
+        throw new Error(t('Suppliers response is invalid. Please restart the app server and try again.'));
       }
 
       setPurchases(latestPurchases);
@@ -608,7 +612,7 @@ export const Purchases = () => {
       );
       resetForm();
     } catch (err: any) {
-      alert(err.message || 'Failed to save purchase');
+      alert(err.message || t('Failed to save purchase'));
     } finally {
       setSaving(false);
     }
@@ -618,16 +622,16 @@ export const Purchases = () => {
     <div className="space-y-6">
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-6 2xl:px-8 py-6 border-b border-gray-100 bg-gradient-to-r from-orange-50 to-amber-50">
-          <h1 className="text-2xl font-bold text-gray-900">Purchase Entry</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('Purchase Entry')}</h1>
           <p className="text-sm text-gray-600 mt-1">
-            Reuse supplier data, pick GST slabs quickly, and capture item-wise purchase cost with minimal typing.
+            {t('Reuse supplier data, pick GST slabs quickly, and capture item-wise purchase cost with minimal typing.')}
           </p>
         </div>
 
         <form ref={formRef} onSubmit={handleSubmit} className="p-6 2xl:p-8 space-y-8">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <div className="space-y-2 relative">
-              <label className="text-sm font-semibold text-gray-700">Supplier Name</label>
+              <label className="text-sm font-semibold text-gray-700">{t('Supplier Name')}</label>
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                 <input
@@ -657,7 +661,7 @@ export const Purchases = () => {
                       advanceFocus(e.currentTarget);
                     }
                   }}
-                  placeholder="Type supplier name"
+                  placeholder={t('Type supplier name')}
                   className="w-full pl-11 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none"
                   required
                 />
@@ -674,7 +678,7 @@ export const Purchases = () => {
                     >
                       <p className="font-semibold text-gray-900">{supplier.name}</p>
                       <p className="text-xs text-gray-500">
-                        {supplier.supplier_phone || 'No phone'} • {supplier.supplier_gstin || 'No GSTIN'}
+                        {supplier.supplier_phone || t('No phone')} • {supplier.supplier_gstin || t('No GSTIN')}
                       </p>
                     </button>
                   ))}
@@ -683,7 +687,7 @@ export const Purchases = () => {
             </div>
 
             <label className="space-y-2">
-              <span className="text-sm font-semibold text-gray-700">Supplier Phone</span>
+              <span className="text-sm font-semibold text-gray-700">{t('Supplier Phone')}</span>
               <input
                 data-purchase-nav="true"
                 type="text"
@@ -700,7 +704,7 @@ export const Purchases = () => {
             </label>
 
             <label className="space-y-2">
-              <span className="text-sm font-semibold text-gray-700">Supplier GSTIN</span>
+              <span className="text-sm font-semibold text-gray-700">{t('Supplier GSTIN')}</span>
               <input
                 data-purchase-nav="true"
                 type="text"
@@ -717,7 +721,7 @@ export const Purchases = () => {
             </label>
 
             <label className="space-y-2 xl:col-span-2">
-              <span className="text-sm font-semibold text-gray-700">Supplier Address</span>
+              <span className="text-sm font-semibold text-gray-700">{t('Supplier Address')}</span>
               <input
                 data-purchase-nav="true"
                 type="text"
@@ -734,7 +738,7 @@ export const Purchases = () => {
             </label>
 
             <label className="space-y-2">
-              <span className="text-sm font-semibold text-gray-700">Invoice Number</span>
+              <span className="text-sm font-semibold text-gray-700">{t('Invoice Number')}</span>
               <input
                 data-purchase-nav="true"
                 type="text"
@@ -751,7 +755,7 @@ export const Purchases = () => {
             </label>
 
             <label className="space-y-2">
-              <span className="text-sm font-semibold text-gray-700">Invoice Date</span>
+              <span className="text-sm font-semibold text-gray-700">{t('Invoice Date')}</span>
               <input
                 data-purchase-nav="true"
                 type="date"
@@ -768,25 +772,23 @@ export const Purchases = () => {
             </label>
 
             <label className="space-y-2 xl:col-span-3">
-              <span className="text-sm font-semibold text-gray-700">Notes</span>
+              <span className="text-sm font-semibold text-gray-700">{t('Notes')}</span>
               <textarea
                 data-purchase-nav="true"
                 value={form.notes}
                 onChange={(e) => setForm((current) => ({ ...current, notes: e.target.value }))}
                 rows={2}
                 className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none resize-none"
-                placeholder="Optional purchase note"
+                placeholder={t('Optional purchase note')}
               />
             </label>
           </div>
 
           <div className="space-y-4">
             <div>
-              <h2 className="text-lg font-bold text-gray-900">Purchase Items</h2>
+              <h2 className="text-lg font-bold text-gray-900">{t('Purchase Items')}</h2>
               <p className="text-sm text-gray-500">
-                Search an item and keep pressing Enter to move across the row. Enter the cost either before or after GST — the
-                other is worked out from the GST. The selling price is what this stock is billed at, once older stock has sold.
-                Type a name that is not in the list to add it as a new item.
+                {t('Search an item and keep pressing Enter to move across the row. Enter the cost either before or after GST — the other is worked out from the GST. The selling price is what this stock is billed at, once older stock has sold. Type a name that is not in the list to add it as a new item.')}
               </p>
             </div>
 
@@ -808,22 +810,22 @@ export const Purchases = () => {
                 </colgroup>
                 <thead className="bg-gray-50">
                   <tr className={TABLE_HEAD_ROW}>
-                    <th className="pl-4 pr-2 py-3">Item</th>
-                    <th className="px-2 py-3">HSN</th>
-                    <th className="px-2 py-3">Metric</th>
-                    <th className="px-2 py-3 text-right">Qty</th>
+                    <th className="pl-4 pr-2 py-3">{t('Item')}</th>
+                    <th className="px-2 py-3">{t('HSN')}</th>
+                    <th className="px-2 py-3">{t('Metric')}</th>
+                    <th className="px-2 py-3 text-right">{t('Qty')}</th>
                     <th className="px-2 py-3 text-right">
-                      Cost<span className={HEADER_NOTE}>before GST</span>
+                      {t('Cost')}<span className={HEADER_NOTE}>{t('before GST')}</span>
                     </th>
-                    <th className="px-2 py-3">GST</th>
+                    <th className="px-2 py-3">{t('GST')}</th>
                     <th className="px-2 py-3 text-right">
-                      Cost<span className={HEADER_NOTE}>after GST</span>
+                      {t('Cost')}<span className={HEADER_NOTE}>{t('after GST')}</span>
                     </th>
                     <th className="px-2 py-3 text-right">
-                      Selling Price<span className={HEADER_NOTE}>incl. GST</span>
+                      {t('Selling Price')}<span className={HEADER_NOTE}>{t('incl. GST')}</span>
                     </th>
                     <th className="pl-2 pr-4 py-3 text-right">
-                      Amount<span className={HEADER_NOTE}>incl. GST</span>
+                      {t('Amount')}<span className={HEADER_NOTE}>{t('incl. GST')}</span>
                     </th>
                   </tr>
                 </thead>
@@ -851,7 +853,7 @@ export const Purchases = () => {
                       <tr key={rowIndex} className={cn('align-top', isTrailingEmpty && 'bg-orange-50/30')}>
                         <td className="pl-4 pr-2 py-2.5">
                           <input
-                            aria-label="Item"
+                            aria-label={t('Item')}
                             ref={(element) => {
                               if (element) itemInputRefs.current.set(rowIndex, element);
                               else itemInputRefs.current.delete(rowIndex);
@@ -886,18 +888,18 @@ export const Purchases = () => {
                                 advanceFocus(e.currentTarget);
                               }
                             }}
-                            placeholder="Search or add item"
+                            placeholder={t('Search or add item')}
                             title={row.item_query}
                             className={ROW_FIELD}
                           />
                           {isNew && (
-                            <p className="mt-1 truncate text-[11px] font-semibold text-orange-600" title="Added to the catalogue when this purchase is saved">
-                              New item
+                            <p className="mt-1 truncate text-[11px] font-semibold text-orange-600" title={t('Added to the catalogue when this purchase is saved')}>
+                              {t('New item')}
                             </p>
                           )}
                           {selected && (
                             <p className="mt-1 truncate text-[11px] text-gray-400">
-                              {selected.stock_quantity} {selected.metric} in stock
+                              {t('{stock_quantity} {metric} in stock', { stock_quantity: selected.stock_quantity, metric: selected.metric })}
                             </p>
                           )}
 
@@ -918,16 +920,16 @@ export const Purchases = () => {
                                       onMouseDown={() => selectItem(rowIndex, item.id)}
                                       className="w-full px-4 py-2.5 text-left hover:bg-orange-50 transition-colors"
                                     >
-                                      <p className="font-semibold text-gray-900">{item.name}</p>
+                                      <p className="font-semibold text-gray-900"><ItemName name={item.name} /></p>
                                       <p className="text-xs text-gray-500">
-                                        HSN {getItemHsnCode(item) || 'Not set'} • {item.stock_quantity} {item.metric} in stock
-                                        {item.price > 0 ? ` • selling at Rs. ${item.price.toFixed(2)}` : ''}
+                                        {t('HSN')} {getItemHsnCode(item) || t('Not set')} • {t('{stock_quantity} {metric} in stock', { stock_quantity: item.stock_quantity, metric: unitLabel(item.metric) })}
+                                        {item.price > 0 ? t(' • selling at Rs. {value}', { value: item.price.toFixed(2) }) : ''}
                                       </p>
                                     </button>
                                   ))
                                 ) : (
                                   <p className="px-4 py-3 text-sm text-gray-600">
-                                    Not in the catalogue. Fill in its HSN and unit in this row; it is created when the purchase is saved.
+                                    {t('Not in the catalogue. Fill in its HSN and unit in this row; it is created when the purchase is saved.')}
                                   </p>
                                 )}
                               </div>,
@@ -938,13 +940,13 @@ export const Purchases = () => {
                         <td className="px-2 py-2.5">
                           {isNew ? (
                             <input
-                              aria-label="HSN code"
+                              aria-label={t('HSN code')}
                               data-purchase-nav="true"
                               type="text"
                               value={row.hsn_code}
                               onChange={(e) => upsertRow(rowIndex, { hsn_code: e.target.value })}
                               onKeyDown={enterAdvances}
-                              placeholder="HSN"
+                              placeholder={t('HSN')}
                               className={cn(ROW_FIELD, 'bg-white', !row.hsn_code.trim() && 'border-orange-300')}
                             />
                           ) : (
@@ -956,13 +958,13 @@ export const Purchases = () => {
 
                         <td className="px-2 py-2.5">
                           <select
-                            aria-label="Unit"
+                            aria-label={t('Unit')}
                             data-purchase-nav="true"
                             value={unit}
                             disabled={!isNew}
                             onChange={(e) => upsertRow(rowIndex, { metric: e.target.value })}
                             onKeyDown={enterAdvances}
-                            title={selected ? 'An existing item’s unit is changed in Items → Edit' : 'Unit this item is bought and sold in'}
+                            title={selected ? t('An existing item’s unit is changed in Items → Edit') : t('Unit this item is bought and sold in')}
                             className={cn(
                               ROW_FIELD,
                               'px-2 disabled:text-gray-600 disabled:cursor-not-allowed',
@@ -970,9 +972,9 @@ export const Purchases = () => {
                               isNew && !row.metric && 'border-orange-300'
                             )}
                           >
-                            <option value="" disabled>Unit</option>
+                            <option value="" disabled>{t('Unit')}</option>
                             {UNIT_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>{option.label}</option>
+                              <option key={option.value} value={option.value}>{t(option.label)}</option>
                             ))}
                             {/* An older item may use a unit no longer offered. */}
                             {unit && !knownUnit && <option value={unit}>{unit}</option>}
@@ -981,7 +983,7 @@ export const Purchases = () => {
 
                         <td className="px-2 py-2.5">
                           <input
-                            aria-label="Quantity"
+                            aria-label={t('Quantity')}
                             data-purchase-nav="true"
                             type="number"
                             inputMode="decimal"
@@ -998,7 +1000,7 @@ export const Purchases = () => {
 
                         <td className="px-2 py-2.5">
                           <select
-                            aria-label="GST"
+                            aria-label={t('GST')}
                             data-purchase-nav="true"
                             value={gstChoiceOf(row)}
                             onChange={(e) => {
@@ -1006,7 +1008,7 @@ export const Purchases = () => {
                               upsertRow(rowIndex, { gst_mode: mode as GstMode, gst_percent: Number(percent) });
                             }}
                             onKeyDown={enterAdvances}
-                            title="GST: CGST + SGST, from a supplier in this state. IGST: from another state."
+                            title={t('GST: CGST + SGST, from a supplier in this state. IGST: from another state.')}
                             className={cn(ROW_FIELD, 'px-2')}
                           >
                             {GST_CHOICES.map((choice) => (
@@ -1021,7 +1023,7 @@ export const Purchases = () => {
 
                         <td className="px-2 py-2.5">
                           <input
-                            aria-label="Selling price incl. GST"
+                            aria-label={t('Selling price incl. GST')}
                             data-purchase-nav="true"
                             type="number"
                             inputMode="decimal"
@@ -1039,11 +1041,11 @@ export const Purchases = () => {
                             )}
                           />
                           {belowCost ? (
-                            <p className="mt-1 text-right text-[11px] font-semibold text-red-500">Below cost</p>
+                            <p className="mt-1 text-right text-[11px] font-semibold text-red-500">{t('Below cost')}</p>
                           ) : (
                             saleItem && row.selling_price > 0 && (
                               <p className="mt-1 truncate text-right text-[11px] text-gray-400">
-                                {saleGstRate(saleItem) > 0 ? `incl. ${saleGstRate(saleItem)}% GST` : 'no GST'}
+                                {saleGstRate(saleItem) > 0 ? t('incl. {saleItem}% GST', { saleItem: saleGstRate(saleItem) }) : t('no GST')}
                               </p>
                             )
                           )}
@@ -1054,18 +1056,18 @@ export const Purchases = () => {
                             <p className="h-9 leading-9 text-gray-300">-</p>
                           ) : (
                             <>
-                              <p className="min-h-9 py-2 leading-5 break-words font-bold text-gray-900" title={`Rs. ${row.total_amount.toFixed(2)}`}>
-                                Rs. {row.total_amount.toFixed(2)}
+                              <p className="min-h-9 py-2 leading-5 break-words font-bold text-gray-900" title={t('Rs. {value}', { value: row.total_amount.toFixed(2) })}>
+                                {t('Rs. {value}', { value: row.total_amount.toFixed(2) })}
                               </p>
                               <p
                                 className="text-[11px] break-words text-gray-400"
                                 title={
                                   row.gst_mode === 'split'
-                                    ? `CGST Rs. ${row.cgst_amount.toFixed(2)} + SGST Rs. ${row.sgst_amount.toFixed(2)}`
-                                    : `IGST Rs. ${row.igst_amount.toFixed(2)}`
+                                    ? t('CGST Rs. {value} + SGST Rs. {value2}', { value: row.cgst_amount.toFixed(2), value2: row.sgst_amount.toFixed(2) })
+                                    : t('IGST Rs. {value}', { value: row.igst_amount.toFixed(2) })
                                 }
                               >
-                                GST Rs. {(row.sgst_amount + row.cgst_amount + row.igst_amount).toFixed(2)}
+                                {t('GST Rs. {value}', { value: (row.sgst_amount + row.cgst_amount + row.igst_amount).toFixed(2) })}
                               </p>
                             </>
                           )}
@@ -1079,29 +1081,29 @@ export const Purchases = () => {
 
             <div className="grid gap-4 md:grid-cols-3">
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                <p className="text-xs font-bold text-gray-500 uppercase">Subtotal</p>
-                <p className="text-2xl font-black text-gray-900 mt-1">Rs. {totals.subtotal.toFixed(2)}</p>
+                <p className="text-xs font-bold text-gray-500 uppercase">{t('Subtotal')}</p>
+                <p className="text-2xl font-black text-gray-900 mt-1">{t('Rs. {value}', { value: totals.subtotal.toFixed(2) })}</p>
               </div>
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                <p className="text-xs font-bold text-gray-500 uppercase">GST Total</p>
-                <p className="text-2xl font-black text-amber-600 mt-1">Rs. {totals.tax.toFixed(2)}</p>
+                <p className="text-xs font-bold text-gray-500 uppercase">{t('GST Total')}</p>
+                <p className="text-2xl font-black text-amber-600 mt-1">{t('Rs. {value}', { value: totals.tax.toFixed(2) })}</p>
               </div>
               <div className="bg-orange-50 rounded-2xl p-4 border border-orange-100">
-                <p className="text-xs font-bold text-orange-600 uppercase">Grand Total</p>
-                <p className="text-2xl font-black text-orange-700 mt-1">Rs. {totals.total.toFixed(2)}</p>
+                <p className="text-xs font-bold text-orange-600 uppercase">{t('Grand Total')}</p>
+                <p className="text-2xl font-black text-orange-700 mt-1">{t('Rs. {value}', { value: totals.total.toFixed(2) })}</p>
               </div>
             </div>
 
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-bold text-gray-900">Payment</p>
+                  <p className="text-sm font-bold text-gray-900">{t('Payment')}</p>
                   <p className="text-xs text-gray-500">
                     {payment.mode === 'credit'
-                      ? 'Nothing paid yet — the full amount goes to Purchase Credit.'
+                      ? t('Nothing paid yet — the full amount goes to Purchase Credit.')
                       : payment.mode === 'full'
-                        ? 'Paid in full now — goes straight to Payments Done.'
-                        : `Rs. ${Math.max(0, round2(totals.total - (Number(payment.amount) || 0))).toFixed(2)} will be owed and go to Purchase Credit.`}
+                        ? t('Paid in full now — goes straight to Payments Done.')
+                        : t('Rs. {value} will be owed and go to Purchase Credit.', { value: Math.max(0, round2(totals.total - (Number(payment.amount) || 0))).toFixed(2) })}
                   </p>
                 </div>
                 <div className="inline-flex rounded-2xl bg-white border border-gray-200 p-1">
@@ -1115,7 +1117,7 @@ export const Purchases = () => {
                         payment.mode === mode ? 'bg-orange-600 text-white shadow' : 'text-gray-600 hover:bg-gray-50'
                       )}
                     >
-                      {label}
+                      {t(label)}
                     </button>
                   ))}
                 </div>
@@ -1125,7 +1127,7 @@ export const Purchases = () => {
                 <div className="grid gap-4 md:grid-cols-3">
                   {payment.mode === 'part' && (
                     <label className="space-y-2">
-                      <span className="text-sm font-semibold text-gray-700">Paid now (Rs.)</span>
+                      <span className="text-sm font-semibold text-gray-700">{t('Paid now (Rs.)')}</span>
                       <input
                         type="number"
                         step="0.01"
@@ -1138,28 +1140,28 @@ export const Purchases = () => {
                   )}
                   <label className="space-y-2">
                     <span className="text-sm font-semibold text-gray-700">
-                      Method <span className="font-normal text-gray-400">(optional)</span>
+                      {t('Method')} <span className="font-normal text-gray-400">{t('(optional)')}</span>
                     </span>
                     <select
                       value={payment.method}
                       onChange={(e) => setPayment((current) => ({ ...current, method: e.target.value }))}
                       className="w-full px-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none"
                     >
-                      <option value="">Not recorded</option>
+                      <option value="">{t('Not recorded')}</option>
                       {PAYMENT_METHOD_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
+                        <option key={option.value} value={option.value}>{t(option.label)}</option>
                       ))}
                     </select>
                   </label>
                   <label className="space-y-2">
                     <span className="text-sm font-semibold text-gray-700">
-                      Reference <span className="font-normal text-gray-400">(optional)</span>
+                      {t('Reference')} <span className="font-normal text-gray-400">{t('(optional)')}</span>
                     </span>
                     <input
                       type="text"
                       value={payment.reference}
                       onChange={(e) => setPayment((current) => ({ ...current, reference: e.target.value }))}
-                      placeholder="UTR / cheque no."
+                      placeholder={t('UTR / cheque no.')}
                       className="w-full px-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none"
                     />
                   </label>
@@ -1169,7 +1171,7 @@ export const Purchases = () => {
 
             <div className="flex flex-wrap items-center justify-end gap-3">
               <p className="mr-auto text-sm text-gray-500">
-                {draftStarted ? 'Kept if you go to another page, until you save or clear it.' : ''}
+                {draftStarted ? t('Kept if you go to another page, until you save or clear it.') : ''}
               </p>
               <button
                 type="button"
@@ -1178,7 +1180,7 @@ export const Purchases = () => {
                 className="inline-flex items-center gap-2 px-5 py-4 rounded-2xl border border-gray-200 bg-white font-bold text-gray-700 hover:bg-gray-50 transition-all disabled:opacity-50"
               >
                 <Eraser size={18} />
-                Clear
+                {t('Clear')}
               </button>
               <button
                 type="submit"
@@ -1186,7 +1188,7 @@ export const Purchases = () => {
                 className="inline-flex items-center gap-2 px-6 py-4 rounded-2xl bg-orange-600 text-white font-bold shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all disabled:opacity-60"
               >
                 <Save size={18} />
-                {saving ? 'Saving Purchase...' : 'Save Purchase'}
+                {saving ? t('Saving Purchase...') : t('Save Purchase')}
               </button>
             </div>
           </div>
@@ -1196,11 +1198,11 @@ export const Purchases = () => {
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-5 border-b border-gray-100">
           <div>
-            <h2 className="text-xl font-bold text-gray-900">Recent Purchases</h2>
-            <p className="text-sm text-gray-500">Latest purchase entries saved in the system.</p>
+            <h2 className="text-xl font-bold text-gray-900">{t('Recent Purchases')}</h2>
+            <p className="text-sm text-gray-500">{t('Latest purchase entries saved in the system.')}</p>
           </div>
           <Link to="/history?view=purchases" className="text-sm font-bold text-orange-600 hover:underline">
-            Search all in Purchase history →
+            {t('Search all in Purchase history →')}
           </Link>
         </div>
 
@@ -1208,23 +1210,23 @@ export const Purchases = () => {
           <table className="w-full text-left">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">Purchase No.</th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">Supplier</th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">Invoice</th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">Created By</th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">Created At</th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-right">Total</th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-right">Payment</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">{t('Purchase No.')}</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">{t('Supplier')}</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">{t('Invoice')}</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">{t('Created By')}</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">{t('Created At')}</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-right">{t('Total')}</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-right">{t('Payment')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-gray-400">Loading purchases...</td>
+                  <td colSpan={7} className="px-6 py-12 text-center text-gray-400">{t('Loading purchases...')}</td>
                 </tr>
               ) : purchases.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-gray-400">No purchases recorded yet.</td>
+                  <td colSpan={7} className="px-6 py-12 text-center text-gray-400">{t('No purchases recorded yet.')}</td>
                 </tr>
               ) : (
                 purchases.map((purchase) => (
@@ -1232,19 +1234,19 @@ export const Purchases = () => {
                     <td className="px-6 py-4 font-mono font-bold text-gray-900">{purchase.purchase_number}</td>
                     <td className="px-6 py-4">
                       <p className="font-semibold text-gray-900">{purchase.supplier_name}</p>
-                      <p className="text-xs text-gray-500">{purchase.supplier_gstin || 'No GSTIN'}</p>
+                      <p className="text-xs text-gray-500">{purchase.supplier_gstin || t('No GSTIN')}</p>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">{purchase.invoice_number || 'N/A'}</td>
                     <td className="px-6 py-4 text-sm text-gray-600">{purchase.user_name}</td>
                     <td className="px-6 py-4 text-sm text-gray-600">{formatDateTimeInIST(purchase.created_at)}</td>
-                    <td className="px-6 py-4 text-right font-bold text-orange-600">Rs. {purchase.total_amount.toFixed(2)}</td>
+                    <td className="px-6 py-4 text-right font-bold text-orange-600">{t('Rs. {value}', { value: purchase.total_amount.toFixed(2) })}</td>
                     <td className="px-6 py-4 text-right">
                       {(purchase.balance_due ?? 0) > 0 ? (
                         <span className="text-xs font-bold px-2 py-1 rounded-full bg-amber-50 text-amber-700 whitespace-nowrap">
-                          Due Rs. {(purchase.balance_due ?? 0).toFixed(2)}
+                          {t('Due Rs. {value}', { value: (purchase.balance_due ?? 0).toFixed(2) })}
                         </span>
                       ) : (
-                        <span className="text-xs font-bold px-2 py-1 rounded-full bg-emerald-50 text-emerald-700">Paid</span>
+                        <span className="text-xs font-bold px-2 py-1 rounded-full bg-emerald-50 text-emerald-700">{t('Paid')}</span>
                       )}
                     </td>
                   </tr>

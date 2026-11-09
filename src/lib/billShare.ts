@@ -17,7 +17,7 @@ export const billShareText = (bill: Bill, settings: ShopSettings, balanceDue?: n
   const customer = (bill.customer_shop_name || '').trim() || (bill.customer_name || '').trim();
   const lines: string[] = [];
   lines.push(`*${settings.shop_name}*`);
-  lines.push(`Bill *${bill.bill_number}* · ${formatDateTimeInIST(bill.created_at)}`);
+  lines.push(`Bill *${bill.bill_number}* · ${formatDateTimeInIST(bill.created_at, undefined, 'en-GB')}`);
   if (customer) lines.push(`To: ${customer}`);
   lines.push('');
 

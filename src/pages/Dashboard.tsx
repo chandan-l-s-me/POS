@@ -27,6 +27,8 @@ import {
 } from 'recharts';
 import { cn, formatISTDateKeyLabel } from '../lib/utils';
 import { useThemeStore } from '../store/useThemeStore';
+import { itemLabel, paymentLabel, t, tn, unitLabel } from '../i18n';
+import { ItemName } from '../components/ItemName';
 
 export const Dashboard = () => {
   const [data, setData] = useState<any>(null);
@@ -41,15 +43,15 @@ export const Dashboard = () => {
       // Without a catch the failure surfaced only as an unhandled rejection in
       // the console, and the page said "Failed to load analytics." with no
       // indication of why.
-      .catch((err: any) => setError(err?.message || 'Could not load analytics.'))
+      .catch((err: any) => setError(err?.message || t('Could not load analytics.')))
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <div className="p-8 text-center text-gray-400">Loading analytics...</div>;
+  if (loading) return <div className="p-8 text-center text-gray-400">{t('Loading analytics...')}</div>;
   if (!data) {
     return (
       <div className="p-8 text-center text-red-400">
-        {error || 'Failed to load analytics.'}
+        {error || t('Failed to load analytics.')}
       </div>
     );
   }
@@ -86,46 +88,46 @@ export const Dashboard = () => {
 
   const stats = [
     {
-      label: "Today's Revenue",
+      label: t('Today\'s Revenue'),
       value: formatMoney(data.todayRevenue),
       icon: DollarSign,
       color: "from-[#232d9b] to-[#5534b7]",
       iconColor: "text-white",
-      note: `${Number(data.todayBillCount || 0).toLocaleString('en-IN')} bills`,
+      note: t('{count} bills', { count: Number(data.todayBillCount || 0).toLocaleString('en-IN') }),
     },
     {
-      label: "Monthly Revenue",
+      label: t('Monthly Revenue'),
       value: formatMoney(data.monthRevenue),
       icon: TrendingUp,
       color: "from-[#5534b7] to-[#b153d7]",
       iconColor: "text-white",
-      note: 'This month',
+      note: t('This month'),
     },
     {
-      label: "Top Selling Item",
-      value: data.topItems[0]?.name || 'N/A',
+      label: t('Top Selling Item'),
+      value: data.topItems[0] ? itemLabel(data.topItems[0].name) : t('N/A'),
       icon: Package,
       color: "from-[#1b1f46] to-[#232d9b]",
       iconColor: "text-white",
-      note: data.topItems[0] ? `${Number(data.topItems[0].total_qty).toLocaleString('en-IN')} sold (90d)` : 'No sales yet',
+      note: data.topItems[0] ? t('{count} sold (90d)', { count: Number(data.topItems[0].total_qty).toLocaleString('en-IN') }) : t('No sales yet'),
     },
     {
-      label: "Bills This Month",
+      label: t('Bills This Month'),
       value: Number(data.monthBillCount || 0).toLocaleString('en-IN'),
       icon: ShoppingCart,
       color: "from-[#b153d7] to-[#e164b5]",
       iconColor: "text-white",
-      note: `${Number(data.todayBillCount || 0).toLocaleString('en-IN')} today`,
+      note: t('{count} today', { count: Number(data.todayBillCount || 0).toLocaleString('en-IN') }),
     },
     {
-      label: "Owed to Suppliers",
+      label: t('Owed to Suppliers'),
       value: formatMoney(data.supplierDue),
       icon: Wallet,
       color: "from-[#e164b5] to-[#f08a5d]",
       iconColor: "text-white",
       note: Number(data.supplierDueCount || 0) > 0
-        ? `${Number(data.supplierDueCount).toLocaleString('en-IN')} supplier${Number(data.supplierDueCount) === 1 ? '' : 's'}`
-        : 'All paid',
+        ? tn(Number(data.supplierDueCount), '1 supplier', '{count} suppliers')
+        : t('All paid'),
       to: '/purchase-credit',
     },
   ];
@@ -136,24 +138,24 @@ export const Dashboard = () => {
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.22),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(255,255,255,0.12),transparent_22%)]" />
         <div className="relative flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.35em] text-white/70">Admin Overview</p>
-            <h1 className="mt-3 text-4xl font-black tracking-tight">Business Performance Dashboard</h1>
+            <p className="text-xs font-bold uppercase tracking-[0.35em] text-white/70">{t('Admin Overview')}</p>
+            <h1 className="mt-3 text-4xl font-black tracking-tight">{t('Business Performance Dashboard')}</h1>
             <p className="mt-3 max-w-2xl text-sm text-white/80">
-              Real-time revenue, sales momentum, payment mix, and inventory pressure in one place.
+              {t('Real-time revenue, sales momentum, payment mix, and inventory pressure in one place.')}
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur-sm">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">Revenue Today</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">{t('Revenue Today')}</p>
               <p className="mt-1 text-xl font-black">{formatMoney(data.todayRevenue)}</p>
             </div>
             <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur-sm">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">Best Seller</p>
-              <p className="mt-1 text-xl font-black truncate">{data.topItems[0]?.name || 'N/A'}</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">{t('Best Seller')}</p>
+              <div className="mt-1 text-xl font-black">{data.topItems[0] ? <ItemName name={data.topItems[0].name} truncate /> : t('N/A')}</div>
             </div>
             <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur-sm col-span-2 sm:col-span-1">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">Low Stock</p>
-              <p className="mt-1 text-xl font-black">{lowStockItems.length} items</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">{t('Low Stock')}</p>
+              <p className="mt-1 text-xl font-black">{t('{length} items', { length: lowStockItems.length })}</p>
             </div>
           </div>
         </div>
@@ -193,10 +195,10 @@ export const Dashboard = () => {
         {/* Sales Chart */}
         <div className="lg:col-span-2 bg-white/90 backdrop-blur-sm p-8 rounded-3xl shadow-[0_18px_40px_rgba(35,45,155,0.08)] border border-white/60">
           <div className="flex items-center justify-between mb-8">
-            <h3 className="font-bold text-xl">Revenue Overview</h3>
+            <h3 className="font-bold text-xl">{t('Revenue Overview')}</h3>
             <div className="flex items-center gap-2 text-sm text-gray-500 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100">
               <Calendar size={16} />
-              <span>Last 30 Days</span>
+              <span>{t('Last 30 Days')}</span>
             </div>
           </div>
           <div className="h-[350px] w-full">
@@ -246,19 +248,19 @@ export const Dashboard = () => {
 
         {/* Payment Methods */}
         <div className="bg-white/90 backdrop-blur-sm p-8 rounded-3xl shadow-[0_18px_40px_rgba(35,45,155,0.08)] border border-white/60">
-          <h3 className="font-bold text-xl mb-8">Payment Methods</h3>
+          <h3 className="font-bold text-xl mb-8">{t('Payment Methods')}</h3>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={data.paymentMethods}
+                  data={data.paymentMethods.map((pm: any) => ({ ...pm, label: paymentLabel(pm.payment_method) }))}
                   cx="50%"
                   cy="50%"
                   innerRadius={60}
                   outerRadius={100}
                   paddingAngle={8}
                   dataKey="total"
-                  nameKey="payment_method"
+                  nameKey="label"
                 >
                   {data.paymentMethods.map((_entry: any, index: number) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -274,7 +276,7 @@ export const Dashboard = () => {
               <div key={pm.payment_method} className="flex items-center justify-between text-sm">
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
-                  <span className="capitalize text-gray-500">{pm.payment_method}</span>
+                  <span className="capitalize text-gray-500">{paymentLabel(pm.payment_method)}</span>
                 </div>
                 <span className="font-bold text-gray-900">₹{pm.total.toFixed(2)}</span>
               </div>
@@ -286,10 +288,10 @@ export const Dashboard = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Top Items */}
         <div className="bg-white/90 backdrop-blur-sm p-8 rounded-3xl shadow-[0_18px_40px_rgba(35,45,155,0.08)] border border-white/60">
-          <h3 className="font-bold text-xl mb-8">Top Selling Items</h3>
+          <h3 className="font-bold text-xl mb-8">{t('Top Selling Items')}</h3>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data.topItems} layout="vertical">
+              <BarChart data={data.topItems.map((item: any) => ({ ...item, name: itemLabel(item.name) }))} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={gridStroke} />
                 <XAxis type="number" hide />
                 <YAxis 
@@ -318,14 +320,14 @@ export const Dashboard = () => {
         {/* Low Stock Alert */}
         <div className="bg-white/90 backdrop-blur-sm p-8 rounded-3xl shadow-[0_18px_40px_rgba(35,45,155,0.08)] border border-white/60">
           <div className="flex items-center justify-between mb-8">
-            <h3 className="font-bold text-xl">Low Stock Alerts</h3>
+            <h3 className="font-bold text-xl">{t('Low Stock Alerts')}</h3>
             <span className="text-xs font-bold text-purple-600 bg-purple-100 px-2 py-1 rounded-full">
-              {lowStockItems.length > 0 ? 'Action Required' : 'Healthy Stock'}
+              {lowStockItems.length > 0 ? t('Action Required') : t('Healthy Stock')}
             </span>
           </div>
           <div className="space-y-4">
             {lowStockItems.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-12">All items are in stock</p>
+              <p className="text-sm text-gray-400 text-center py-12">{t('All items are in stock')}</p>
             ) : (
               lowStockItems.map((item) => (
                 <div
@@ -333,13 +335,13 @@ export const Dashboard = () => {
                   className="flex items-center justify-between rounded-2xl border border-orange-100 bg-gradient-to-r from-[#f5f1ff] to-[#fff1fa] px-4 py-4"
                 >
                   <div>
-                    <p className="font-semibold text-gray-900">{item.name}</p>
-                    <p className="text-sm text-gray-500">HSN: {item.hsn_code || 'Not set'}</p>
+                    <p className="font-semibold text-gray-900"><ItemName name={item.name} /></p>
+                    <p className="text-sm text-gray-500">{t('HSN:')} {item.hsn_code || t('Not set')}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs font-bold uppercase tracking-wider text-purple-600">Stock Left</p>
+                    <p className="text-xs font-bold uppercase tracking-wider text-purple-600">{t('Stock Left')}</p>
                     <p className="text-lg font-black text-orange-600">
-                      {item.stock_quantity} <span className="text-xs font-medium text-purple-600">{item.metric}</span>
+                      {item.stock_quantity} <span className="text-xs font-medium text-purple-600">{unitLabel(item.metric)}</span>
                     </p>
                   </div>
                 </div>
