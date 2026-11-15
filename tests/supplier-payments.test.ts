@@ -254,3 +254,118 @@ describe('paying a supplier', () => {
     assert.equal((await cashier.post('/api/supplier-payments', { supplier_id: 1, amount: 1 })).status, 403);
   });
 });
+
+describe('buying without a supplier', () => {
+  const invoice = () => `NOSUP-${Date.now().toString(36)}-${++supplierSeq}`;
+
+  it('saves a purchase paid in full, with its method, and lists it as paid', async () => {
+    const ref = invoice();
+    const suppliersBefore = (await admin.get('/api/suppliers')).body.length;
+    const purchase = await buy('', 500, { amount_paid: 500, payment_method: 'cash', invoice_number: ref });
+    assert.equal(purchase.balance_due, 0);
+    assert.equal((await admin.get('/api/suppliers')).body.length, suppliersBefore, 'no supplier is made up');
+
+    const [row] = (await admin.get(`/api/purchases?search=${ref}`)).body.data;
+    assert.equal(row.supplier_id, null);
+    assert.equal(row.supplier_name, '');
+    assert.equal(row.amount_paid, 500);
+    assert.equal(row.paid_cash, 500, 'counts in the report’s cash total');
+
+    const detail = (await admin.get(`/api/purchases/${purchase.purchase_id}`)).body;
+    assert.deepEqual(detail.payments.map((p: any) => [p.amount, p.method]), [[500, 'cash']]);
+
+    const done = await paid(ref);
+    assert.equal(done.total, 1, 'in Payments Done');
+    assert.equal(done.data[0].supplier_name, '');
+
+    const payments = (await admin.get('/api/supplier-payments?limit=200')).body.data;
+    const payment = payments.find((p: any) => p.allocations.some((a: any) => a.purchase_id === purchase.purchase_id));
+    assert.equal(payment.supplier_id, null);
+    assert.equal(payment.supplier_name, null);
+
+    const removed = await admin.del(`/api/supplier-payments/${payment.id}`);
+    assert.equal(removed.status, 400, 'it would leave the purchase owing no one');
+    assert.equal((await paid(ref)).total, 1, 'still paid');
+    assert.equal((await credit()).suppliers.some((s) => s.supplier_id == null), false, 'never on Purchase Credit');
+  });
+
+  it('refuses buying on credit, or in part, without a supplier', async () => {
+    for (const amount_paid of [0, 100]) {
+      const res = await admin.post('/api/purchases', {
+        supplier_name: '  ',
+        amount_paid,
+        items: [{ item_id: itemId, quantity: 1, unit_cost: 300, sgst_rate: 0, cgst_rate: 0, igst_rate: 0, selling_price: 600 }],
+      });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /without a supplier must be paid in full/);
+    }
+  });
+
+  it('refuses supplier details with no supplier name', async () => {
+    const res = await admin.post('/api/purchases', {
+      supplier_phone: '9876543210',
+      amount_paid: 300,
+      items: [{ item_id: itemId, quantity: 1, unit_cost: 300, sgst_rate: 0, cgst_rate: 0, igst_rate: 0, selling_price: 600 }],
+    });
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /Enter the supplier name/);
+  });
+});
+
+describe('upgrading a shop database', () => {
+  it('lets payments have no supplier, keeping every payment already on file', async () => {
+    const { createRequire } = await import('node:module');
+    const Database = createRequire(import.meta.url)('better-sqlite3');
+
+    // A shop on the version before: supplier_payments.supplier_id NOT NULL.
+    const old = await startServer();
+    let upgraded: TestServer | null = null;
+    try {
+      const c = client(old.baseUrl);
+      assert.equal((await c.login('admin', ADMIN_PASSWORD)).status, 200);
+      const id = await purchaseNewItem(c, itemFields({ gst_applicable: false, gst_rate: 0, sgst_rate: 0, cgst_rate: 0 }), {
+        quantity: 2, unit_cost: 40, selling_price: 80,
+      });
+      const bought = await c.post('/api/purchases', {
+        supplier_name: 'Old Supplier', amount_paid: 80, payment_method: 'upi',
+        items: [{ item_id: id, quantity: 2, unit_cost: 40, sgst_rate: 0, cgst_rate: 0, igst_rate: 0, selling_price: 80 }],
+      });
+      assert.equal(bought.status, 201, JSON.stringify(bought.body));
+      await old.kill();
+      const db = new Database(old.dbPath);
+      try {
+        db.pragma('foreign_keys = OFF');
+        db.exec(`
+          CREATE TABLE sp_old (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, supplier_id INTEGER NOT NULL, amount REAL NOT NULL CHECK(amount > 0),
+            paid_on TEXT NOT NULL, method TEXT CHECK(method IN ('cash', 'upi', 'bank', 'cheque')), reference TEXT, note TEXT,
+            user_id INTEGER, user_name TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id), FOREIGN KEY (user_id) REFERENCES users(id)
+          );
+          INSERT INTO sp_old SELECT * FROM supplier_payments;
+          DROP TABLE supplier_payments;
+          ALTER TABLE sp_old RENAME TO supplier_payments;
+        `);
+        const notNull = (db.prepare('PRAGMA table_info(supplier_payments)').all() as any[]).find((c) => c.name === 'supplier_id').notnull;
+        assert.equal(notNull, 1, 'set up as the old version had it');
+      } finally {
+        db.close();
+      }
+
+      upgraded = await startServer({ DB_PATH: old.dbPath });
+      const u = client(upgraded.baseUrl);
+      assert.equal((await u.login('admin', ADMIN_PASSWORD)).status, 200);
+      const payments = (await u.get('/api/supplier-payments')).body.data;
+      assert.deepEqual(payments.map((p: any) => [p.supplier_name, p.amount, p.method]), [['Old Supplier', 80, 'upi']], 'kept');
+      const res = await u.post('/api/purchases', {
+        amount_paid: 40, payment_method: 'cash',
+        items: [{ item_id: id, quantity: 1, unit_cost: 40, sgst_rate: 0, cgst_rate: 0, igst_rate: 0, selling_price: 80 }],
+      });
+      assert.equal(res.status, 201, JSON.stringify(res.body));
+      assert.equal((await u.get('/api/supplier-payments')).body.total, 2);
+    } finally {
+      await upgraded?.kill();
+      await old.stop();
+    }
+  });
+});

@@ -23,7 +23,7 @@ describe('WhatsApp bill', () => {
     assert.match(text, /Bill \*INV-13102026-00004\*/);
     assert.match(text, /To: Sri Ganesh Bakery/);
     assert.match(text, /2 bag × ₹880\.00 = ₹1,760\.00/);
-    assert.match(text, /\*Total: ₹1,930\.00\*/);
+    assert.match(text, /\*Total \(incl\. GST\): ₹1,930\.00\*/);
     assert.match(text, /Paid: Cash ₹1,000\.00/);
     assert.match(text, /On credit: ₹930\.00/);
     assert.match(text, /_Total balance due: ₹15,452\.03_/);

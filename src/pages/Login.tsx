@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
 import { api } from '../api';
+import { Capacitor } from '@capacitor/core';
 import { motion } from 'motion/react';
 import { Lock, User, Eye, EyeOff, Maximize, Minimize } from 'lucide-react';
 import { useFullscreen } from '../hooks/useFullscreen';
@@ -30,7 +31,9 @@ export const Login = () => {
     setLoading(true);
     
     try {
-      const { token, user } = await api.login({ username, password });
+      // On the phone app a cashier stays signed in (see useSessionCheck);
+      // in a browser, and for admins anywhere, the sign-in lasts a working day.
+      const { token, user } = await api.login({ username, password, stay_signed_in: Capacitor.isNativePlatform() });
       setAuth(user, token);
       // Back to where they were headed (the phone app opens /m); otherwise a
       // cashier on a phone gets Quick Bill and everyone else their usual start.

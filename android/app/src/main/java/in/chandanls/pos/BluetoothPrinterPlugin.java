@@ -66,7 +66,7 @@ public class BluetoothPrinterPlugin extends Plugin {
     @PermissionCallback
     private void listAfterPermission(PluginCall call) {
         if (needsPermission()) {
-            call.reject("Allow \"Nearby devices\" for Vyapara Billing to use a Bluetooth printer.");
+            call.reject("Allow \"Nearby devices\" for Vasavi Billing to use a Bluetooth printer.");
             return;
         }
         listNow(call);
@@ -110,7 +110,7 @@ public class BluetoothPrinterPlugin extends Plugin {
     @PermissionCallback
     private void printAfterPermission(PluginCall call) {
         if (needsPermission()) {
-            call.reject("Allow \"Nearby devices\" for Vyapara Billing to use a Bluetooth printer.");
+            call.reject("Allow \"Nearby devices\" for Vasavi Billing to use a Bluetooth printer.");
             return;
         }
         printNow(call);

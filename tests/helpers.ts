@@ -43,6 +43,7 @@ export interface TestServer {
    */
   kill: () => Promise<void>;
   stderr: () => string;
+  stdout: () => string;
 }
 
 export async function startServer(env: Record<string, string> = {}): Promise<TestServer> {
@@ -73,6 +74,12 @@ export async function startServer(env: Record<string, string> = {}): Promise<Tes
         // Kannada item names come from Google Translate; never from a test,
         // unless it points TRANSLATE_API_BASE at a stand-in and turns this on.
         TRANSLATE_ITEM_NAMES: 'off',
+        // No admin from the developer's .env; tests/remote-admin.test.ts sets its own.
+        REMOTE_ADMIN_USERNAME: '',
+        REMOTE_ADMIN_PASSWORD: '',
+        // Nor an erase from it: tests/start-fresh.test.ts sets its own.
+        START_FRESH: '',
+        START_FRESH_CONFIRM: '',
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -121,7 +128,7 @@ export async function startServer(env: Record<string, string> = {}): Promise<Tes
     fs.rmSync(dir, { recursive: true, force: true });
   };
 
-  return { baseUrl, dbPath, stop, kill, stderr: () => stderr };
+  return { baseUrl, dbPath, stop, kill, stderr: () => stderr, stdout: () => stdout };
 }
 
 export interface ApiResult<T = any> {

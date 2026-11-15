@@ -223,6 +223,8 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
       cgstRate,
       sgstRate,
       igstRate,
+      // The line's whole GST rate: CGST + SGST, or IGST.
+      gstRate: igstRate || cgstRate + sgstRate,
     };
   });
 
@@ -337,23 +339,25 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
             <colgroup>
               <col style={{ width: '5%' }} />
               <col />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '10%' }} />
               <col style={{ width: '11%' }} />
               <col style={{ width: '10%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '7%' }} />
-              <col style={{ width: '14%' }} />
+              <col style={{ width: '6%' }} />
+              <col style={{ width: '13%' }} />
             </colgroup>
             <thead>
               <tr>
                 <th>Sl No.</th>
                 <th>Description of Goods</th>
                 <th>HSN/SAC</th>
+                <th className="num">GST</th>
                 <th className="num">Price (incl. GST)</th>
                 <th className="num">Quantity</th>
-                <th className="num">Rate</th>
+                <th className="num">Rate (before GST)</th>
                 <th>per</th>
-                <th className="num">Amount</th>
+                <th className="num">Amount (before GST)</th>
               </tr>
             </thead>
             <tbody>
@@ -362,6 +366,10 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
                   <td>{index + 1}</td>
                   <td className="invoice-a5__item">{row.item.item_name}</td>
                   <td>{row.item.hsn_code || '-'}</td>
+                  <td className="num">
+                    {formatRate(row.gstRate)}
+                    <div>{formatAmount(row.totalTax)}</div>
+                  </td>
                   <td className="num">{formatAmount(row.unitPrice)}</td>
                   <td className="num invoice-a5__strong">{formatQuantity(row.item.quantity)} {unitOf(row.item.metric)}</td>
                   <td className="num">{formatAmount(row.rate)}</td>
@@ -370,30 +378,30 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
                 </tr>
               ))}
               <tr className="invoice-a5__subtotal">
-                <td /><td /><td /><td /><td /><td /><td />
+                <td /><td /><td /><td /><td /><td /><td /><td />
                 <td className="num">{formatAmount(subtotal)}</td>
               </tr>
               {hasIgst && (
                 <tr>
-                  <td /><td className="invoice-a5__charge">IGST</td><td /><td /><td /><td /><td />
+                  <td /><td className="invoice-a5__charge">IGST</td><td /><td /><td /><td /><td /><td />
                   <td className="num invoice-a5__strong">{formatAmount(gstSummary.igst)}</td>
                 </tr>
               )}
               {(!hasIgst || gstSummary.cgst > 0) && (
                 <>
                   <tr>
-                    <td /><td className="invoice-a5__charge">CGST</td><td /><td /><td /><td /><td />
+                    <td /><td className="invoice-a5__charge">CGST</td><td /><td /><td /><td /><td /><td />
                     <td className="num invoice-a5__strong">{formatAmount(gstSummary.cgst)}</td>
                   </tr>
                   <tr>
-                    <td /><td className="invoice-a5__charge">SGST</td><td /><td /><td /><td /><td />
+                    <td /><td className="invoice-a5__charge">SGST</td><td /><td /><td /><td /><td /><td />
                     <td className="num invoice-a5__strong">{formatAmount(gstSummary.sgst)}</td>
                   </tr>
                 </>
               )}
               {bill.discount_amount > 0 && (
                 <tr>
-                  <td /><td className="invoice-a5__charge"><span className="invoice-a5__less">Less :</span>Discount</td><td /><td /><td /><td /><td />
+                  <td /><td className="invoice-a5__charge"><span className="invoice-a5__less">Less :</span>Discount</td><td /><td /><td /><td /><td /><td />
                   <td className="num invoice-a5__strong">(-){formatAmount(bill.discount_amount)}</td>
                 </tr>
               )}
@@ -403,17 +411,17 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
                   <td className="invoice-a5__charge">
                     {roundOff < 0 && <span className="invoice-a5__less">Less :</span>}Round Off
                   </td>
-                  <td /><td /><td /><td /><td />
+                  <td /><td /><td /><td /><td /><td />
                   <td className="num invoice-a5__strong">{roundOff < 0 ? `(-)${formatAmount(-roundOff)}` : formatAmount(roundOff)}</td>
                 </tr>
               )}
             </tbody>
             <tfoot>
               <tr>
-                <td /><td className="num">Total</td><td /><td />
+                <td /><td className="num invoice-a5__grand-label">Total (incl. GST)</td><td /><td className="num">{formatAmount(bill.tax_amount)}</td><td />
                 <td className="num invoice-a5__strong">{totalQuantity}</td>
-                <td /><td />
-                <td className="num invoice-a5__grand">₹ {formatAmount(roundedTotal)}</td>
+                {/* Across Rate, per and Amount, so the big total has room. */}
+                <td colSpan={3} className="num invoice-a5__grand">₹ {formatAmount(roundedTotal)}</td>
               </tr>
             </tfoot>
           </table>
@@ -523,15 +531,15 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
           <tr className="border-b border-dashed border-black">
             <th className="py-1 text-left">Item</th>
             <th className="py-1 text-center">Qty</th>
-            <th className="py-1 text-right">Amt</th>
+            <th className="py-1 text-right">Amt incl. GST</th>
           </tr>
         </thead>
         <tbody>
-          {bill.items?.map((item) => (
+          {lineRows.map(({ item, gstRate, totalTax }) => (
             <tr key={item.id}>
               <td className="py-0.5">
                 <div>{item.item_name}</div>
-                <div className="text-[9px]">HSN {item.hsn_code || '-'}</div>
+                <div className="text-[9px]">HSN {item.hsn_code || '-'} · GST {formatRate(gstRate)} {formatMoney(totalTax)}</div>
               </td>
               <td className="py-0.5 text-center">{item.quantity}</td>
               <td className="py-0.5 text-right">{formatMoney(item.total_amount)}</td>
@@ -542,7 +550,7 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
 
       <div className="mt-2 border-t border-dashed border-black pt-1 text-[10px]">
         <div className="flex justify-between">
-          <span>Subtotal</span>
+          <span>Subtotal (before GST)</span>
           <span>{formatMoney(subtotal)}</span>
         </div>
         <div className="flex justify-between">
@@ -561,9 +569,9 @@ export const Receipt: React.FC<ReceiptProps> = ({ billId, onDataLoaded, layoutOv
             <span>{formatMoney(roundOff)}</span>
           </div>
         )}
-        <div className="mt-1 border-t border-black pt-1 flex justify-between text-[12px] font-bold">
-          <span>Total</span>
-          <span>{formatMoney(roundedTotal)}</span>
+        <div className="mt-1 border-t-2 border-black pt-1.5 flex items-baseline justify-between gap-2 font-bold">
+          <span className="text-[13px]">Total (incl. GST)</span>
+          <span className="text-[20px] font-black leading-none">₹{formatMoney(roundedTotal)}</span>
         </div>
       </div>
     </div>

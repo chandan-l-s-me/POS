@@ -21,13 +21,11 @@ import {
   PieChart,
   Pie,
   Cell,
-  BarChart,
-  Bar,
   Legend
 } from 'recharts';
 import { cn, formatISTDateKeyLabel } from '../lib/utils';
 import { useThemeStore } from '../store/useThemeStore';
-import { itemLabel, paymentLabel, t, tn, unitLabel } from '../i18n';
+import { itemLabel, localName, paymentLabel, t, tn, unitLabel } from '../i18n';
 import { ItemName } from '../components/ItemName';
 
 export const Dashboard = () => {
@@ -96,7 +94,7 @@ export const Dashboard = () => {
       note: t('{count} bills', { count: Number(data.todayBillCount || 0).toLocaleString('en-IN') }),
     },
     {
-      label: t('Monthly Revenue'),
+      label: t('Monthly Revenue (incl. GST)'),
       value: formatMoney(data.monthRevenue),
       icon: TrendingUp,
       color: "from-[#5534b7] to-[#b153d7]",
@@ -105,7 +103,8 @@ export const Dashboard = () => {
     },
     {
       label: t('Top Selling Item'),
-      value: data.topItems[0] ? itemLabel(data.topItems[0].name) : t('N/A'),
+      // Kannada alone on a Kannada screen: "Kannada (English)" ran to four lines here.
+      value: data.topItems[0] ? localName(data.topItems[0].name) : t('N/A'),
       icon: Package,
       color: "from-[#1b1f46] to-[#232d9b]",
       iconColor: "text-white",
@@ -146,7 +145,7 @@ export const Dashboard = () => {
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur-sm">
-              <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">{t('Revenue Today')}</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-white/65">{t('Revenue Today (incl. GST)')}</p>
               <p className="mt-1 text-xl font-black">{formatMoney(data.todayRevenue)}</p>
             </div>
             <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur-sm">
@@ -195,7 +194,7 @@ export const Dashboard = () => {
         {/* Sales Chart */}
         <div className="lg:col-span-2 bg-white/90 backdrop-blur-sm p-8 rounded-3xl shadow-[0_18px_40px_rgba(35,45,155,0.08)] border border-white/60">
           <div className="flex items-center justify-between mb-8">
-            <h3 className="font-bold text-xl">{t('Revenue Overview')}</h3>
+            <h3 className="font-bold text-xl">{t('Revenue Overview')}<span className="block text-xs font-medium text-gray-400">{t('incl. GST')}</span></h3>
             <div className="flex items-center gap-2 text-sm text-gray-500 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100">
               <Calendar size={16} />
               <span>{t('Last 30 Days')}</span>
@@ -289,32 +288,37 @@ export const Dashboard = () => {
         {/* Top Items */}
         <div className="bg-white/90 backdrop-blur-sm p-8 rounded-3xl shadow-[0_18px_40px_rgba(35,45,155,0.08)] border border-white/60">
           <h3 className="font-bold text-xl mb-8">{t('Top Selling Items')}</h3>
-          <div className="h-[300px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data.topItems.map((item: any) => ({ ...item, name: itemLabel(item.name) }))} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={gridStroke} />
-                <XAxis type="number" hide />
-                <YAxis 
-                  dataKey="name" 
-                  type="category" 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fill: '#4f4a76', fontSize: 12, fontWeight: 600 }}
-                  width={100}
-                />
-                <Tooltip 
-                  cursor={{ fill: '#f9fafb' }}
-                  contentStyle={{ 
-                    backgroundColor: '#fff', 
-                    borderRadius: '16px', 
-                    border: '1px solid rgba(85, 52, 183, 0.12)', 
-                    boxShadow: '0 18px 40px rgba(35,45,155,0.12)' 
-                  }}
-                />
-                <Bar dataKey="total_qty" fill={barFill} radius={[0, 10, 10, 0]} barSize={30} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {/* A ranked list rather than a bar chart: an item's name is two lines
+              on a Kannada screen (Kannada, then English), which a chart axis
+              cannot fit without the names running into each other. */}
+          {data.topItems.length === 0 ? (
+            <p className="py-16 text-center text-sm text-gray-400">{t('No sales yet')}</p>
+          ) : (
+            <ol className="space-y-4">
+              {data.topItems.map((item: any, index: number) => {
+                const most = Number(data.topItems[0]?.total_qty) || 1;
+                const share = Math.max(4, Math.round((Number(item.total_qty) / most) * 100));
+                return (
+                  <li key={item.name} className="flex items-center gap-3">
+                    <span className="w-5 shrink-0 text-right text-sm font-black text-gray-300 tabular-nums">{index + 1}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 text-sm font-semibold text-gray-800" title={itemLabel(item.name)}>
+                          <ItemName name={item.name} truncate />
+                        </div>
+                        <span className="shrink-0 text-sm font-bold tabular-nums text-gray-700">
+                          {Number(item.total_qty).toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 h-2.5 rounded-full bg-gray-100">
+                        <div className="h-2.5 rounded-full" style={{ width: `${share}%`, backgroundColor: barFill }} />
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
         </div>
 
         {/* Low Stock Alert */}

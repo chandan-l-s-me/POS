@@ -1,5 +1,6 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import type { PaperWidth } from './escpos';
+import { inScreenLanguage } from '../i18n';
 
 /**
  * The Android app's Bluetooth printer.
@@ -24,7 +25,7 @@ const BluetoothPrinter = registerPlugin<BluetoothPrinterPlugin>('BluetoothPrinte
 export const hasBluetoothPrinting = () =>
   Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('BluetoothPrinter');
 
-export const listPairedPrinters = async () => (await BluetoothPrinter.listPaired()).devices;
+export const listPairedPrinters = async () => (await inScreenLanguage(BluetoothPrinter.listPaired())).devices;
 
 const toBase64 = (bytes: Uint8Array) => {
   let binary = '';
@@ -35,7 +36,7 @@ const toBase64 = (bytes: Uint8Array) => {
 };
 
 export const printToBluetooth = (address: string, bytes: Uint8Array) =>
-  BluetoothPrinter.print({ address, data: toBase64(bytes) });
+  inScreenLanguage(BluetoothPrinter.print({ address, data: toBase64(bytes) }));
 
 // --- Where this phone prints -------------------------------------------------
 //

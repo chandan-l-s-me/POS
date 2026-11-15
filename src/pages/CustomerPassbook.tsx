@@ -15,8 +15,9 @@ import { api } from '../api';
 import { Bill, Customer, PassbookEntry, PassbookSummary } from '../types';
 import { cn, formatDateTimeInIST, getISTDateKey } from '../lib/utils';
 import { customerContactName, customerDisplayName } from '../lib/customer';
-import { t, tn, unitLabel } from '../i18n';
-import { ItemName } from '../components/ItemName';
+import { localName, t, tn, unitLabel } from '../i18n';
+import { HEADER_NOTE } from '../lib/entryStyles';
+import { ItemName, LocalName } from '../components/ItemName';
 
 /**
  * A customer's passbook: every transaction with them, in one place.
@@ -257,12 +258,12 @@ export const CustomerPassbook = () => {
             {t('Passbook')}
           </p>
           <h1 className="mt-2 text-3xl font-bold text-gray-900">
-            {customer ? customerDisplayName(customer) : ' '}
+            {customer ? <LocalName name={customerDisplayName(customer)} /> : ' '}
           </h1>
           {contact && (
             <p className="mt-1 flex items-center gap-1.5 text-sm font-semibold text-orange-600">
               <User size={14} />
-              {contact}
+              {localName(contact)}
             </p>
           )}
           <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-gray-500">
@@ -496,7 +497,7 @@ export const CustomerPassbook = () => {
                                     <th className="pb-2 text-left font-bold">{t('Item')}</th>
                                     <th className="pb-2 text-left font-bold">{t('HSN')}</th>
                                     <th className="pb-2 text-right font-bold">{t('Qty')}</th>
-                                    <th className="pb-2 text-right font-bold">{t('Amount')}</th>
+                                    <th className="pb-2 text-right font-bold">{t('Amount')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></th>
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-50">
@@ -511,7 +512,7 @@ export const CustomerPassbook = () => {
                                 </tbody>
                               </table>
                               <div className="mt-3 flex flex-wrap justify-end gap-x-6 gap-y-1 border-t border-gray-100 pt-3 text-xs text-gray-500">
-                                <span>{t('Subtotal {subtotal_amount}', { subtotal_amount: money(detail.bill.subtotal_amount) })}</span>
+                                <span>{t('Subtotal before GST {subtotal_amount}', { subtotal_amount: money(detail.bill.subtotal_amount) })}</span>
                                 <span>{t('GST {tax_amount}', { tax_amount: money(detail.bill.tax_amount) })}</span>
                                 {detail.bill.discount_amount > 0 && <span>{t('Discount −{discount_amount}', { discount_amount: money(detail.bill.discount_amount) })}</span>}
                                 <span>
@@ -520,7 +521,7 @@ export const CustomerPassbook = () => {
                                     (detail.bill.subtotal_amount + detail.bill.tax_amount - detail.bill.discount_amount)
                                   )) })}
                                 </span>
-                                <span className="font-bold text-gray-900">{t('Total {total_amount}', { total_amount: money(detail.bill.total_amount) })}</span>
+                                <span className="font-bold text-gray-900">{t('Total incl. GST {total_amount}', { total_amount: money(detail.bill.total_amount) })}</span>
                               </div>
                             </div>
                           )}

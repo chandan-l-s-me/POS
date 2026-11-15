@@ -61,6 +61,23 @@ export const t = (text: string, vars?: TranslationVars): string =>
 export const tn = (count: number, one: string, many: string, vars?: TranslationVars) =>
   t(count === 1 ? one : many, { count, ...vars });
 
+/**
+ * `call`, with its error message shown in the language in use. For the
+ * Android app's own code (Bluetooth printing, sharing a PDF), which answers in
+ * English: its messages are in kn.ts, so phones get them in Kannada with no
+ * new app to install.
+ */
+export const inScreenLanguage = async <T,>(call: Promise<T>): Promise<T> => {
+  try {
+    return await call;
+  } catch (err: any) {
+    const message = String(err?.message ?? err ?? '');
+    const translated = new Error(t(message)) as Error & { code?: string };
+    translated.code = err?.code;
+    throw translated;
+  }
+};
+
 /** The text in English, whatever the language in use: for bills and records. */
 export const inEnglish = (text: string, vars?: TranslationVars) => fill(text, vars);
 
@@ -136,6 +153,13 @@ export const itemKannada = (name: string | null | undefined): string | null => {
  * labels and charts; lists and tables show both on two lines (ItemName).
  * Search still matches the English name.
  */
+/**
+ * Any name the app keeps in Kannada letters (an item, a customer, a bakery),
+ * as one short line: the Kannada on a Kannada screen, otherwise as typed. For
+ * tabs, headings and messages; lists show both (LocalName).
+ */
+export const localName = (name: string | null | undefined): string => itemKannada(name) ?? (name ?? '');
+
 export const itemLabel = (name: string | null | undefined): string => {
   const english = name ?? '';
   const kannada = itemKannada(english);

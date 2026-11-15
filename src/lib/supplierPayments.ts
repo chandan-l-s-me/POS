@@ -29,3 +29,6 @@ export const todayIST = () =>
 
 /** "Today", "1 day", "45 days" — how long a purchase has been unpaid. */
 export const ageLabel = (days: number) => (days <= 0 ? t('Today') : days === 1 ? t('1 day') : t('{count} days', { count: days }));
+
+/** Who a purchase or payment was from: its supplier, or "No supplier" for one bought without. */
+export const supplierLabel = (name: string | null | undefined) => name?.trim() || t('No supplier');

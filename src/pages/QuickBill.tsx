@@ -25,8 +25,11 @@ import { useBackButton } from '../lib/backButton';
 import { round2 } from '../lib/billMath';
 import { cn, formatDateInIST } from '../lib/utils';
 import { LanguageSwitch } from '../components/LanguageSwitch';
-import { itemKannada, itemLabel, paymentLabel, t, tn, unitLabel } from '../i18n';
-import { ItemName } from '../components/ItemName';
+import { itemKannada, itemLabel, localName, paymentLabel, t, tn, unitLabel } from '../i18n';
+import { ItemName, LocalName } from '../components/ItemName';
+import { BulkNote } from '../components/BulkPrices';
+import { searchList } from '../lib/fuzzy';
+import { CUSTOMER_SEARCH, ITEM_SEARCH } from '../lib/searchFields';
 
 /**
  * Quick Bill: billing on a phone, for cashiers walking the shop floor.
@@ -43,7 +46,7 @@ const rupees = (value: number) =>
   `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const qty = (value: number) => Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 3 });
 
-type Sheet = null | 'customer' | 'search' | 'settings' | { keypad: number };
+type Sheet = null | 'customer' | 'search' | 'settings' | 'discount' | { keypad: number };
 type QuickItem = Item & { times_bought?: number; ordered_quantity?: number };
 type PrintState = { kind: 'idle' } | { kind: 'working'; text: string } | { kind: 'done'; text: string } | { kind: 'error'; text: string };
 
@@ -58,11 +61,16 @@ export const QuickBill = () => {
   const { items: catalogue, itemsComplete, settings, refreshItems } = useDataStore();
   const notice = useNoticeStore();
 
-  const { carts, activeCartId, setCustomer, setPaymentMethod, setPaymentAmount, updateQuantity, removeItem, clearCart } = useCartStore();
+  const { carts, activeCartId, setCustomer, setPaymentMethod, setPaymentAmount, setDiscount, updateQuantity, removeItem, clearCart } = useCartStore();
   const cart = useMemo(() => carts.find((entry) => entry.id === activeCartId) || carts[0], [carts, activeCartId]);
   const customer = cart.customer;
   const lines = cart.items;
   const total = cart.totals.total;
+  // Rupees off the whole bill, after GST; then the total is floored to whole
+  // rupees and the paise dropped are the round off.
+  const discount = cart.discount || 0;
+  const grossTotal = round2(cart.totals.subtotal + cart.totals.tax);
+  const roundOff = round2(total - (grossTotal - discount));
 
   const [sheet, setSheet] = useState<Sheet>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -299,21 +307,24 @@ export const QuickBill = () => {
     })();
     setSaving(true);
     try {
-      const result = await api.createBill({
+      const payload = {
         customer_id: customer?.id || null,
         items: lines.map((line) => ({ id: line.id, quantity: line.quantity })),
+        discount_amount: discount,
         expected_total: total,
         payment_method: cart.paymentMethod,
         cash_amount: cart.paymentAmounts.cash,
         upi_amount: cart.paymentAmounts.upi,
         credit_amount: cart.paymentAmounts.credit,
         print_at_counter: printMode === 'counter',
-      });
+      };
+      // A bill opened for editing (History → Edit Bill) replaces that bill.
+      const result = cart.editing ? await api.updateBill(cart.editing.billId, payload) : await api.createBill(payload);
       setDone({
         billId: result.bill_id,
         billNumber: result.bill_number,
         total: result.total_amount,
-        customer: customer ? customerDisplayName(customer) : t('Walk-in customer'),
+        customer: customer ? localName(customerDisplayName(customer)) : t('Walk-in customer'),
         paid: paidSummary,
         customerId: customer?.id ?? null,
         phone: customer?.phone ?? null,
@@ -377,10 +388,10 @@ export const QuickBill = () => {
       <div className="bg-white px-4 py-3 border-b border-gray-100">
         <button onClick={() => setSheet('customer')} className="flex w-full items-center justify-between gap-3 rounded-2xl border border-gray-200 px-4 py-3 text-left active:bg-gray-50">
           <span className="min-w-0">
-            <span className="block truncate font-bold">{customer ? customerDisplayName(customer) : t('Walk-in customer')}</span>
+            <span className="block truncate font-bold">{customer ? localName(customerDisplayName(customer)) : t('Walk-in customer')}</span>
             <span className="block truncate text-xs text-gray-500">
               {customer
-                ? [customerContactName(customer), customer.credit_balance > 0 ? `owes ${rupees(customer.credit_balance)}` : null].filter(Boolean).join(' · ') || customer.phone
+                ? [localName(customerContactName(customer)) || null, customer.credit_balance > 0 ? `owes ${rupees(customer.credit_balance)}` : null].filter(Boolean).join(' · ') || customer.phone
                 : t('Tap to choose a bakery')}
             </span>
           </span>
@@ -404,7 +415,7 @@ export const QuickBill = () => {
 
         {suggestions.length > 0 && (
           <div className="px-4 pt-3">
-            <p className="mb-2 text-xs font-bold uppercase text-gray-400">{usual.length && customer ? t('Usual for {customer}', { customer: customerDisplayName(customer) }) : t('Best sellers')}</p>
+            <p className="mb-2 text-xs font-bold uppercase text-gray-400">{usual.length && customer ? t('Usual for {customer}', { customer: localName(customerDisplayName(customer)) }) : t('Best sellers')}</p>
             {/* One row, swiped sideways, so the bill below stays in view. */}
             <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none]">
               {suggestions.map((item) => {
@@ -446,7 +457,8 @@ export const QuickBill = () => {
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <p className="text-xs text-gray-500">
-                    {line.segments.map((segment) => `${qty(segment.quantity)} × ${rupees(segment.unit_price)}`).join(' + ')} / {unitLabel(line.metric)}
+                    {line.segments.map((segment) => `${qty(segment.quantity)} × ${rupees(segment.unit_price)}`).join(' + ')} / {unitLabel(line.metric)} · {t('incl. GST')}
+                    <BulkNote line={line} className="text-xs" />
                     {short && <span className="block font-bold text-red-600">{t('Only {available} in stock', { available: qty(line.available) })}</span>}
                   </p>
                   <div className="flex shrink-0 items-center gap-0.5">
@@ -476,6 +488,19 @@ export const QuickBill = () => {
           </p>
           <p className="text-3xl font-black tabular-nums">{rupees(total)}</p>
         </div>
+        {lines.length > 0 && (
+          <div className="mt-1 flex items-center justify-between gap-2 text-xs text-gray-500" data-total-breakdown>
+            <button
+              onClick={() => setSheet('discount')}
+              className={cn('rounded-lg px-2 py-1 font-bold', discount > 0 ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600')}
+            >
+              {discount > 0 ? t('Discount {amount}', { amount: rupees(discount) }) : t('Add discount')}
+            </button>
+            <span className="tabular-nums">
+              {rupees(grossTotal)}{discount > 0 ? ` − ${rupees(discount)}` : ''} · {t('Round off {money}', { money: `${roundOff < 0 ? '−' : ''}${rupees(Math.abs(roundOff))}` })}
+            </span>
+          </div>
+        )}
         <div className="mt-3 grid grid-cols-4 gap-2">
           {(['cash', 'upi', 'credit', 'split'] as const).map((method) => (
             <button
@@ -520,7 +545,7 @@ export const QuickBill = () => {
                 : onCredit === 0
                   ? t('Paid in full')
                   : customer
-                    ? t('{onCredit} on {customer}’s credit', { onCredit: rupees(onCredit), customer: customerDisplayName(customer) })
+                    ? t('{onCredit} on {customer}’s credit', { onCredit: rupees(onCredit), customer: localName(customerDisplayName(customer)) })
                     : t('{onCredit} left — choose the bakery to put it on credit', { onCredit: rupees(onCredit) })}
             </p>
           </div>
@@ -582,6 +607,20 @@ export const QuickBill = () => {
           />
         );
       })()}
+      {sheet === 'discount' && (
+        <KeypadSheet
+          title={t('Discount')}
+          unit="₹"
+          initial={discount}
+          allowDecimal
+          decimals={2}
+          max={grossTotal}
+          hint={t('At most {max}, the bill before discount', { max: rupees(grossTotal) })}
+          doneLabel={(value) => (value > 0 ? t('Give {amount} off', { amount: rupees(value) }) : t('No discount'))}
+          onDone={(value) => { setDiscount(round2(value)); setSheet(null); vibrate(); }}
+          onClose={() => setSheet(null)}
+        />
+      )}
       {sheet === 'settings' && (
         <SettingsSheet
           printer={printer}
@@ -684,11 +723,8 @@ const CustomerSheet = ({ customers, selectedId, onPick, onClose }: {
 }) => {
   const [query, setQuery] = useState('');
   const matches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const list = q
-      ? customers.filter((c) => [c.shop_name, c.name, c.phone].some((v) => (v || '').toLowerCase().includes(q)))
-      : customers;
-    return list.slice(0, 60);
+    // Forgives a slip in a name ("ganseh" finds Ganesh).
+    return searchList(customers, query, CUSTOMER_SEARCH).slice(0, 60);
   }, [customers, query]);
 
   return (
@@ -705,10 +741,10 @@ const CustomerSheet = ({ customers, selectedId, onPick, onClose }: {
           <li key={c.id}>
             <button onClick={() => onPick(c)} className={cn('w-full rounded-xl px-3 py-3 text-left active:bg-gray-100', selectedId === c.id && 'bg-orange-50')}>
               <span className="flex items-center justify-between gap-2">
-                <span className="truncate font-bold">{customerDisplayName(c)}</span>
+                <span className="min-w-0 truncate font-bold"><LocalName name={customerDisplayName(c)} truncate /></span>
                 {c.credit_balance > 0 && <span className="shrink-0 text-xs font-bold text-red-600">{t('owes {credit_balance}', { credit_balance: rupees(c.credit_balance) })}</span>}
               </span>
-              <span className="block truncate text-xs text-gray-500">{[customerContactName(c), c.phone].filter(Boolean).join(' · ')}</span>
+              <span className="block truncate text-xs text-gray-500">{[localName(customerContactName(c)) || null, c.phone].filter(Boolean).join(' · ')}</span>
             </button>
           </li>
         ))}
@@ -746,11 +782,9 @@ const SearchSheet = ({ catalogue, complete, lines, onAdd, onStep, onSet, onClose
 
   const matches = useMemo(() => {
     if (remote) return remote;
-    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    if (!words.length) return catalogue.slice(0, 40);
-    return catalogue
-      .filter((item) => words.every((word) => `${item.name} ${item.hsn_code || ''}`.toLowerCase().includes(word)))
-      .slice(0, 40);
+    if (!query.trim()) return catalogue.slice(0, 40);
+    // Forgives a slip ("suger" finds Sugar) when nothing contains the text.
+    return searchList(catalogue, query, ITEM_SEARCH).slice(0, 40);
   }, [catalogue, query, remote]);
 
   const lineFor = (itemId: number) => lines.find((line) => line.id === itemId);
@@ -775,7 +809,7 @@ const SearchSheet = ({ catalogue, complete, lines, onAdd, onStep, onSet, onClose
               >
                 <span className="block font-bold"><ItemName name={item.name} truncate /></span>
                 <span className="block text-xs text-gray-500">
-                  {rupees(item.price)} / {unitLabel(item.metric)} · {out ? t('out of stock') : t('{stock_quantity} in stock', { stock_quantity: qty(item.stock_quantity) })}
+                  {t('{price} incl. GST', { price: rupees(item.price) })} / {unitLabel(item.metric)} · {out ? t('out of stock') : t('{stock_quantity} in stock', { stock_quantity: qty(item.stock_quantity) })}
                 </span>
               </button>
               {line ? (
@@ -831,8 +865,14 @@ const SearchSheet = ({ catalogue, complete, lines, onAdd, onStep, onSet, onClose
   );
 };
 
-const KeypadSheet = ({ title, unit, initial, allowDecimal, max, onDone, onClose, verb = 'Set' }: {
+const KeypadSheet = ({ title, unit, initial, allowDecimal, max, onDone, onClose, verb = 'Set', decimals = 3, hint, doneLabel }: {
   title: string;
+  /** Decimal places allowed: 3 for a weight, 2 for money. */
+  decimals?: number;
+  /** Instead of "{max} in stock", for a keypad that is not entering a quantity. */
+  hint?: string;
+  /** The button's text, for a keypad that is not entering a quantity. */
+  doneLabel?: (value: number) => string;
   /** "Add" for an item not yet in the bill, "Set" to change one that is. */
   verb?: 'Add' | 'Set';
   unit: string;
@@ -853,8 +893,8 @@ const KeypadSheet = ({ title, unit, initial, allowDecimal, max, onDone, onClose,
       if (key === 'del') return current.slice(0, -1);
       if (key === '.') return !allowDecimal || current.includes('.') ? current : (current || '0') + '.';
       const next = current + key;
-      const [, decimals] = next.split('.');
-      if (decimals && decimals.length > 3) return current;
+      const [, fraction] = next.split('.');
+      if (fraction && fraction.length > decimals) return current;
       return next.length > 7 ? current : next;
     });
   };
@@ -866,7 +906,7 @@ const KeypadSheet = ({ title, unit, initial, allowDecimal, max, onDone, onClose,
           {entry === '' ? qty(initial) : entry} <span className="text-lg font-bold text-gray-400">{unit}</span>
         </p>
         <p className={cn('mt-1 text-sm', tooMany ? 'font-bold text-red-600' : 'text-gray-400')}>
-          {t('{max} in stock', { max: qty(max) })}
+          {hint ?? t('{max} in stock', { max: qty(max) })}
         </p>
       </div>
       <div className="grid grid-cols-3 gap-2 px-4 pt-4">
@@ -889,7 +929,7 @@ const KeypadSheet = ({ title, unit, initial, allowDecimal, max, onDone, onClose,
           disabled={tooMany || Number.isNaN(value)}
           className="h-14 w-full rounded-2xl bg-orange-600 text-lg font-black text-white active:bg-orange-700 disabled:opacity-40"
         >
-          {value > 0 ? (verb === 'Add' ? t('Add {quantity} {unit}', { quantity: qty(value), unit }) : t('Set {quantity} {unit}', { quantity: qty(value), unit })) : verb === 'Add' ? t('Cancel') : t('Remove item')}
+          {doneLabel ? doneLabel(value) : value > 0 ? (verb === 'Add' ? t('Add {quantity} {unit}', { quantity: qty(value), unit }) : t('Set {quantity} {unit}', { quantity: qty(value), unit })) : verb === 'Add' ? t('Cancel') : t('Remove item')}
         </button>
       </div>
     </SheetFrame>

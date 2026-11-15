@@ -1,4 +1,4 @@
-VYAPARA BILLING - INSTALLATION
+VASAVI BILLING - INSTALLATION
 ==============================
 
 You need: a Windows 10 or 11 computer (64-bit) and an administrator account.
@@ -8,7 +8,7 @@ Nothing else needs to be installed first.
 INSTALL (once)
 --------------
 1. Unzip the whole folder somewhere, for example the Desktop.
-2. Double-click "Install Vyapara.bat" and choose "Yes" when Windows asks
+2. Double-click "Install Vasavi.bat" and choose "Yes" when Windows asks
    for permission.
 3. Answer the questions:
      - shop name and phone (as printed on bills)
@@ -20,7 +20,7 @@ INSTALL (once)
    staff under Settings > Staff accounts.
 
 After this there is nothing to start. The app runs in the background as soon
-as the computer is switched on. Open it with the "Vyapara Billing" icon on the
+as the computer is switched on. Open it with the "Vasavi Billing" icon on the
 desktop.
 
 
@@ -35,15 +35,15 @@ The app in a browser: http://127.0.0.1:3000
 UPDATE (when you receive a new version)
 ---------------------------------------
 1. Unzip the new version.
-2. Double-click "Update Vyapara.bat" IN THE NEW FOLDER and choose "Yes".
+2. Double-click "Update Vasavi.bat" IN THE NEW FOLDER and choose "Yes".
 The shop data is backed up first and is not changed. If the new version does
 not start, the previous one is put back automatically.
 
 
 UNINSTALL
 ---------
-Settings > Apps > "Vyapara Billing" > Uninstall, or double-click
-"Uninstall Vyapara.bat" in C:\Program Files\VyaparaBilling.
+Settings > Apps > "Vasavi Billing" > Uninstall, or double-click
+"Uninstall Vasavi.bat" in C:\Program Files\VyaparaBilling.
 The shop data in C:\VyaparaData is kept. Installing again uses it.
 
 
@@ -51,9 +51,9 @@ IF SOMETHING IS WRONG
 ---------------------
 - The icon opens a page that says it cannot connect: restart the computer.
   If it still does not open, open "Services" from the Start menu, find
-  "Vyapara Billing" and click Start.
+  "Vasavi Billing" and click Start.
 - Logs: C:\VyaparaData\logs
-- Installer records: %TEMP%\VyaparaBilling-install.log (and -update, -uninstall)
+- Installer records: %TEMP%\VasaviBilling-install.log (and -update, -uninstall)
 
 
 KEEP THE COMPUTER AWAKE

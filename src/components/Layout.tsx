@@ -215,7 +215,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
               exit={{ opacity: 0 }}
               className="text-xl font-bold text-orange-600 tracking-tight"
             >
-              Vypar<span className="text-gray-900">POS</span>
+              Vasavi <span className="text-gray-900">POS</span>
             </motion.h1>
           )}
         </AnimatePresence>

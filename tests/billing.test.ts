@@ -485,7 +485,33 @@ describe('bill numbering', () => {
     const numbers = results.filter((r) => r.status === 200).map((r) => r.body.bill_number);
     assert.equal(numbers.length, 25, 'no sale may be lost to a numbering collision');
     assert.equal(new Set(numbers).size, 25, 'bill numbers must be unique');
-    for (const n of numbers) assert.match(n, /^INV-\d{8}-\d{5}$/);
+    for (const n of numbers) assert.match(n, /^\d{4,}$/);
+    // One running count: these 25 are consecutive.
+    const sorted = numbers.map(Number).sort((a, b) => a - b);
+    assert.equal(sorted[24] - sorted[0], 24, 'no gaps between them');
+  });
+
+  it('counts 0001, 0002 … on from the last bill, never restarting', async () => {
+    const item = await makeItem({ stock_quantity: 10 });
+    const sell = async () => (await admin.post('/api/bills', { items: [{ id: item.id, quantity: 1 }], payment_method: 'cash' })).body.bill_number as string;
+    const first = await sell();
+    const second = await sell();
+    assert.match(first, /^\d{4,}$/);
+    assert.equal(second, String(Number(first) + 1).padStart(4, '0'));
+  });
+
+  it('starts at 0001 in a new shop', async () => {
+    // A fresh shop: the first bill is 0001.
+    const fresh = await startServer();
+    try {
+      const c = client(fresh.baseUrl);
+      await c.login('admin', ADMIN_PASSWORD);
+      const created = await makeStockedItem(c, { price: 10, stock_quantity: 5 });
+      const res = await c.post('/api/bills', { items: [{ id: created.id, quantity: 1 }], payment_method: 'cash' });
+      assert.equal(res.body.bill_number, '0001');
+    } finally {
+      await fresh.stop();
+    }
   });
 });
 

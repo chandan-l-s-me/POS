@@ -16,7 +16,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Customer } from '../types';
 import { cn } from '../lib/utils';
 import { customerContactName, customerDisplayName, customerInitial } from '../lib/customer';
-import { t } from '../i18n';
+import { localName, t } from '../i18n';
+import { LocalName } from '../components/ItemName';
 
 export const Customers = () => {
   // Local rows, for the same reason as the Items screen: this page loads one
@@ -25,6 +26,8 @@ export const Customers = () => {
   const [rows, setRows] = useState<Customer[]>([]);
   const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
+  // Nothing contained the search, so the server sent the closest names.
+  const [closeMatch, setCloseMatch] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [formData, setFormData] = useState<Partial<Customer>>({
@@ -50,7 +53,7 @@ export const Customers = () => {
   // reachable instead of silently absent.
   const reload = useCallback(() => {
     return api.getCustomersPage({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, search: appliedSearch || undefined })
-      .then((res) => { setRows(res?.data ?? []); setTotal(res?.total ?? 0); setLoadError(''); })
+      .then((res) => { setRows(res?.data ?? []); setTotal(res?.total ?? 0); setCloseMatch(Boolean(res?.close_match)); setLoadError(''); })
       .catch((err: any) => setLoadError(err?.message || t('Could not load customers.')));
   }, [page, appliedSearch]);
 
@@ -123,6 +126,12 @@ export const Customers = () => {
         </button>
       </div>
 
+      {closeMatch && (
+        <p className="text-sm text-gray-500">
+          {t('No exact match for “{search}”. Showing the closest names.', { search: appliedSearch })}
+        </p>
+      )}
+
       {loadError && (
         <div className="flex items-center justify-between gap-4 rounded-2xl border border-red-100 bg-red-50 px-6 py-4">
           <p className="font-medium text-red-600">{loadError}</p>
@@ -169,13 +178,13 @@ export const Customers = () => {
                 with no shop is headed by their own name. */}
             <h4 className="font-bold text-xl text-gray-900 mb-1 break-words">
               <Link to={`/customers/${customer.id}`} className="hover:underline">
-                {customerDisplayName(customer)}
+                <LocalName name={customerDisplayName(customer)} />
               </Link>
             </h4>
             {customerContactName(customer) && (
               <p className="flex items-center gap-1.5 text-sm font-semibold text-orange-600 mb-4">
                 <User size={14} />
-                {customerContactName(customer)}
+                {localName(customerContactName(customer))}
               </p>
             )}
 

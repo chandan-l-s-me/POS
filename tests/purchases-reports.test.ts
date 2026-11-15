@@ -197,6 +197,15 @@ describe('reports', () => {
     assert.equal(round2(taxable + row.sgst_amount + row.cgst_amount + (row.igst_amount || 0)), row.total_amount);
   });
 
+  it('gives each sales line its unit price both before and including GST', async () => {
+    // The download labels them "Unit Price (before GST)" and "Unit Price (incl. GST)".
+    const row = (await admin.get('/api/reports/sales-items')).body.data.find((r: any) => r.quantity === 2 && r.total_amount === 236);
+    assert.ok(row, 'the ₹118 × 2 line');
+    assert.equal(row.unit_price, 118, 'including GST: what the customer pays per unit');
+    assert.equal(row.price, 100, 'before GST: ₹118 is ₹100 plus 18%');
+    assert.equal(round2(row.price * row.quantity), round2(row.total_amount - row.sgst_amount - row.cgst_amount - (row.igst_amount || 0)));
+  });
+
   it('returns purchase line items with rates and amounts', async () => {
     const res = await admin.get('/api/reports/purchase-items');
     assert.equal(res.status, 200);
@@ -298,7 +307,8 @@ describe('audit logs', () => {
     const created = await admin.post('/api/bills', {
       items: [{ id: item.id, quantity: 1 }], payment_method: 'cash',
     });
-    const logs = await admin.get(`/api/audit-logs?search=${encodeURIComponent(created.body.bill_number)}`);
+    // "bill 0005", as a short number alone also matches e.g. PUR-…-00005.
+    const logs = await admin.get(`/api/audit-logs?search=${encodeURIComponent(`Created bill ${created.body.bill_number} `)}`);
     assert.equal(logs.status, 200);
     assert.equal(logs.body.total, 1);
     assert.equal(logs.body.data[0].action, 'create');

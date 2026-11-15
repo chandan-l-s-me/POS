@@ -578,7 +578,9 @@ html[lang='kn'] [class*='tracking-'] {
 .invoice-a5__charge { text-align: right; font-style: italic; font-weight: 700; }
 .invoice-a5__less { float: left; font-weight: 400; }
 .invoice-a5__items tfoot td { border-top: 1px solid #000; border-bottom: 1px solid #000; font-size: 8.5px; }
-.invoice-a5__grand { font-size: 10px !important; font-weight: 700; white-space: nowrap; }
+/* The amount to pay: the largest thing on the invoice. */
+.invoice-a5__grand { font-size: 16px !important; font-weight: 800; white-space: nowrap; padding-top: 3px !important; padding-bottom: 3px !important; }
+.invoice-a5__grand-label { font-size: 11px !important; font-weight: 700; white-space: nowrap; }
 
 .invoice-a5__words { padding: 2px 4px; border-bottom: 1px solid #000; }
 .invoice-a5__words .invoice-a5__strong { font-size: 9px; }

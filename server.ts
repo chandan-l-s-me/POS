@@ -18,6 +18,9 @@ import { readPool } from './db/asyncRead';
 // disagree. See src/lib/billMath.ts.
 import {
   allocateFifo,
+  applyBulkPrice,
+  bulkPriceFor,
+  type BulkPrice,
   computeLine,
   lineGstRates,
   priceSegments,
@@ -27,6 +30,9 @@ import {
   saleGstRate,
 } from './src/lib/billMath';
 import { isLooseUnit, UNIT_VALUES } from './src/lib/units';
+import { blocking, checkImportRows, importNameKey, isBlankRow, MAX_IMPORT_ROWS, toImportRow } from './src/lib/itemImport';
+import { barcodeProblem, normalizeBarcode } from './src/lib/barcode';
+import { searchList } from './src/lib/fuzzy';
 
 
 // BigInt serialization fix
@@ -39,6 +45,8 @@ declare global {
   namespace Express {
     interface Request {
       user?: any;
+      /** The session is a stay-signed-in one (a cashier on the phone app). */
+      staySignedIn?: boolean;
     }
   }
 }
@@ -66,6 +74,12 @@ if (!process.env.JWT_SECRET) {
   console.warn('[security] JWT_SECRET not set — using a random secret for this run. All existing sessions will be invalidated on restart. Set JWT_SECRET in your .env file to avoid this.');
 }
 const JWT_EXPIRY = '12h';
+// A cashier signed in on the phone app stays signed in: the session lasts this
+// long and is renewed every time the app is opened (POST /api/auth/session), so
+// only a phone unused for this long asks again. Deactivating the cashier, or
+// resetting their password, ends it at once (token_version and is_active are
+// checked on every request).
+const STAY_SIGNED_IN_EXPIRY = '90d';
 // Pinning these means a token minted for a different purpose (or with a
 // tampered `alg` header) is rejected outright rather than merely unverified.
 const JWT_ALGORITHM = 'HS256' as const;
@@ -126,7 +140,11 @@ app.use((req, res, next) => {
 
 // Cap request bodies. Without a limit, a single crafted request with a
 // multi-megabyte items array can pin the event loop and stall every till.
-app.use(express.json({ limit: '512kb' }));
+// The one exception is importing a shop's whole item list at once.
+const IMPORT_PATH = '/api/items/import';
+const jsonBody = express.json({ limit: '512kb' });
+const importBody = express.json({ limit: '4mb' });
+app.use((req, res, next) => (req.path === IMPORT_PATH ? importBody : jsonBody)(req, res, next));
 
 // --- Input validation helpers ---
 //
@@ -169,6 +187,19 @@ const reqString = (value: unknown, field: string, maxLength = MAX_TEXT_LENGTH): 
   if (!trimmed) fail(`${field} is required`);
   if (trimmed.length > maxLength) fail(`${field} must be at most ${maxLength} characters`);
   return trimmed;
+};
+
+/**
+ * An optional barcode, normalized as every screen compares it (no spaces,
+ * upper case). Absent or empty is null: no barcode.
+ */
+const optBarcode = (value: unknown): string | null => {
+  if (value == null) return null;
+  if (typeof value !== 'string') fail('Barcode must be text');
+  const code = normalizeBarcode(value);
+  const problem = barcodeProblem(code);
+  if (problem) fail(problem);
+  return code || null;
 };
 
 /** Optional string; empty/absent becomes null so it lands cleanly in SQLite. */
@@ -315,6 +346,21 @@ const clientIp = (req: express.Request) => tunnelVisitorIp(req) ?? req.socket.re
 const isRemoteRequest = (req: express.Request) =>
   tunnelVisitorIp(req) !== null || !isLoopback(req.socket.remoteAddress);
 
+/**
+ * Admin accounts work only on this computer (the shop counter, at
+ * localhost). From the internet — the website through the tunnel, or the
+ * phone app — only cashier accounts can sign in. Admin can see costs, staff,
+ * settings and backups, so a stolen admin password is useless away from the
+ * shop. The exception is the one admin account set in .env
+ * (REMOTE_ADMIN_USERNAME / REMOTE_ADMIN_PASSWORD, see syncRemoteAdmin): the
+ * owner's way in from the internet. ALLOW_REMOTE_ADMIN=on lifts the rule for
+ * every admin (for remote support).
+ */
+const ALLOW_REMOTE_ADMIN = ['on', 'true', '1', 'yes'].includes((process.env.ALLOW_REMOTE_ADMIN || '').toLowerCase());
+const ADMIN_LOCAL_ONLY_MESSAGE = 'Admin accounts can be used only on the shop computer. Sign in there.';
+const adminBlockedHere = (user: { role: string; env_managed?: number }, req: express.Request) =>
+  user.role === 'admin' && !user.env_managed && !ALLOW_REMOTE_ADMIN && isRemoteRequest(req);
+
 const throttleKey = (req: express.Request, username: string) =>
   `${clientIp(req)}::${username.toLowerCase()}`;
 
@@ -431,6 +477,76 @@ const seedInitialAdmin = () => {
   }
 };
 seedInitialAdmin();
+
+/**
+ * The admin account for signing in from the internet, set in .env:
+ *
+ *   REMOTE_ADMIN_USERNAME=owner
+ *   REMOTE_ADMIN_PASSWORD=<at least 12 characters>
+ *
+ * Every other admin works only at the shop computer (adminBlockedHere). This
+ * one is created on start, and kept in step with .env on every start: a new
+ * password there replaces the old one (and signs out its sessions); removing
+ * the two lines turns the account off. The app cannot change, deactivate or
+ * delete it — .env is the one place it is managed. Its sign-ins from the
+ * internet are throttled like any other (per address, and per account across
+ * addresses) and written to the activity log.
+ */
+const REMOTE_ADMIN_MIN_PASSWORD = 12;
+const ENV_ACCOUNT_MESSAGE = 'This admin account is set in the .env file (REMOTE_ADMIN_USERNAME and REMOTE_ADMIN_PASSWORD). Change or remove it there, then restart the app.';
+const syncRemoteAdmin = () => {
+  const username = (process.env.REMOTE_ADMIN_USERNAME || '').trim();
+  const password = process.env.REMOTE_ADMIN_PASSWORD || '';
+  const existing = db.prepare('SELECT * FROM users WHERE env_managed = 1').get() as any;
+
+  const turnOff = (why: string) => {
+    if (existing?.is_active) {
+      db.prepare('UPDATE users SET is_active = 0, token_version = token_version + 1 WHERE id = ?').run(existing.id);
+      console.log(`[remote admin] ${existing.username} turned off: ${why}`);
+    }
+  };
+
+  if (!username && !password) {
+    turnOff('REMOTE_ADMIN_USERNAME and REMOTE_ADMIN_PASSWORD are not set');
+    return;
+  }
+  const problem =
+    !username ? 'REMOTE_ADMIN_USERNAME is empty'
+    : !password ? 'REMOTE_ADMIN_PASSWORD is empty'
+    : username.length > 100 ? 'REMOTE_ADMIN_USERNAME is too long'
+    : password.length < REMOTE_ADMIN_MIN_PASSWORD ? `REMOTE_ADMIN_PASSWORD must be at least ${REMOTE_ADMIN_MIN_PASSWORD} characters, as it opens the admin account from the internet`
+    : password.length > MAX_PASSWORD_LENGTH ? 'REMOTE_ADMIN_PASSWORD is too long'
+    : isKnownDemoPassword(password) ? 'REMOTE_ADMIN_PASSWORD is a published demo password'
+    : null;
+  const owner = problem ? undefined : db.prepare('SELECT id, env_managed FROM users WHERE username = ?').get(username) as any;
+  const clash = owner && !owner.env_managed ? `the username "${username}" already belongs to another account; choose a different REMOTE_ADMIN_USERNAME` : null;
+  if (problem || clash) {
+    console.error(`[remote admin] NOT enabled: ${problem || clash}.`);
+    turnOff(problem || clash!);
+    return;
+  }
+
+  const name = (process.env.REMOTE_ADMIN_NAME || '').trim().slice(0, 100) || 'Owner (remote)';
+  if (!existing) {
+    db.prepare("INSERT INTO users (username, password, role, name, env_managed) VALUES (?, ?, 'admin', ?, 1)")
+      .run(username, bcrypt.hashSync(password, BCRYPT_ROUNDS), name);
+    console.log(`[remote admin] admin account "${username}" created from .env; it can sign in from the internet.`);
+    return;
+  }
+  const passwordChanged = !bcrypt.compareSync(password, existing.password);
+  db.prepare(`
+    UPDATE users SET username = ?, name = ?, role = 'admin', is_active = 1,
+      password = ?, token_version = token_version + ?
+    WHERE id = ?
+  `).run(
+    username, name,
+    passwordChanged ? bcrypt.hashSync(password, BCRYPT_ROUNDS) : existing.password,
+    passwordChanged || existing.username !== username ? 1 : 0,
+    existing.id
+  );
+  console.log(`[remote admin] admin account "${username}" can sign in from the internet${passwordChanged ? ' (password updated from .env)' : ''}.`);
+};
+syncRemoteAdmin();
 
 pruneAuditLogs();
 // Sweep daily so a long-running till doesn't accumulate a year of rows.
@@ -563,7 +679,7 @@ const upsertSupplier = (params: {
  *
  * MUST be called inside a db.transaction().
  */
-const nextDocumentNumber = (prefix: 'INV' | 'PUR') => {
+const nextDocumentNumber = (prefix: 'PUR') => {
   const { year, month, day } = getISTDateParts();
   const dateKey = `${day}${month}${year}`;
   const scope = `${prefix}:${dateKey}`;
@@ -574,6 +690,24 @@ const nextDocumentNumber = (prefix: 'INV' | 'PUR') => {
   ).get(scope) as any;
 
   return `${prefix}-${dateKey}-${String(row.last_value).padStart(5, '0')}`;
+};
+
+/**
+ * The next invoice number: 0001, 0002, 0003 … one running count that never
+ * resets (10000 follows 9999). Bills made before this keep their old
+ * INV-DDMMYYYY-NNNNN numbers, which cannot clash with these. A number already
+ * on a bill is skipped, so a restored or edited counter can never reuse one.
+ * Called inside the bill's transaction, so two tills cannot get the same one.
+ */
+const nextBillNumber = () => {
+  db.prepare("INSERT OR IGNORE INTO document_counters (scope, last_value) VALUES ('INV', 0)").run();
+  const bump = db.prepare("UPDATE document_counters SET last_value = last_value + 1 WHERE scope = 'INV' RETURNING last_value");
+  const taken = db.prepare('SELECT 1 FROM bills WHERE bill_number = ?');
+  for (;;) {
+    const { last_value } = bump.get() as { last_value: number };
+    const number = String(last_value).padStart(4, '0');
+    if (!taken.get(number)) return number;
+  }
 };
 
 const getISTDateParts = () => {
@@ -739,13 +873,17 @@ const authenticateToken = (req: express.Request, res: express.Response, next: ex
   // also comes from the database, not the token, so a stale or tampered role
   // claim can never grant admin.
   const user = db.prepare(
-    'SELECT id, username, role, name, token_version, is_active FROM users WHERE id = ?'
+    'SELECT id, username, role, name, token_version, is_active, env_managed FROM users WHERE id = ?'
   ).get(payload.id) as any;
 
   if (!user || !user.is_active) return res.sendStatus(401);
   if (Number(payload.token_version ?? 0) !== Number(user.token_version)) return res.sendStatus(401);
+  // An admin session works only on this computer (see adminBlockedHere). 401,
+  // not 403, so an app open elsewhere signs out instead of half-working.
+  if (adminBlockedHere(user, req)) return res.status(401).json({ error: ADMIN_LOCAL_ONLY_MESSAGE, code: 'ADMIN_LOCAL_ONLY' });
 
   req.user = { id: user.id, username: user.username, role: user.role, name: user.name };
+  req.staySignedIn = payload.stay === 1 && user.role === 'cashier';
   next();
 };
 
@@ -759,12 +897,12 @@ const requireAdmin = (req: express.Request, res: express.Response, next: express
   next();
 };
 
-const issueToken = (user: { id: number; role: string; name: string; token_version: number }) =>
+const issueToken = (user: { id: number; role: string; name: string; token_version: number }, staySignedIn = false) =>
   jwt.sign(
-    { id: user.id, role: user.role, name: user.name, token_version: user.token_version },
+    { id: user.id, role: user.role, name: user.name, token_version: user.token_version, ...(staySignedIn ? { stay: 1 } : {}) },
     JWT_SECRET,
     {
-      expiresIn: JWT_EXPIRY,
+      expiresIn: staySignedIn ? STAY_SIGNED_IN_EXPIRY : JWT_EXPIRY,
       algorithm: JWT_ALGORITHM,
       issuer: JWT_ISSUER,
       audience: JWT_AUDIENCE,
@@ -823,6 +961,14 @@ app.post('/api/auth/login', route((req, res) => {
     return;
   }
 
+  // Admin only at the shop computer. Checked after the password, so a
+  // stranger cannot use it to learn which accounts are admins.
+  if (adminBlockedHere(user, req)) {
+    console.warn(`[security] refused remote admin sign-in to ${user.username} from ${clientIp(req)}`);
+    res.status(403).json({ error: ADMIN_LOCAL_ONLY_MESSAGE, code: 'ADMIN_LOCAL_ONLY' });
+    return;
+  }
+
   // The right password, but one anyone can read in the source. Allowed at the
   // counter so the owner can sign in and change it; refused from outside.
   if (remote && isKnownDemoPassword(password)) {
@@ -835,15 +981,34 @@ app.post('/api/auth/login', route((req, res) => {
   }
 
   clearLoginFailures(key);
-  const token = issueToken(user);
+  // The phone app asks to stay signed in; only cashiers do. An admin session
+  // stays at 12 hours wherever it is.
+  const staySignedIn = req.body?.stay_signed_in === true && user.role === 'cashier';
+  const token = issueToken(user, staySignedIn);
   writeAuditLog({
     user,
     action: 'login',
     entityType: 'auth',
     entityId: user.id,
-    details: `${user.username} signed in`,
+    // Where from, for the account that can sign in from anywhere.
+    details: `${user.username} signed in${user.env_managed && remote ? ` from the internet (${clientIp(req)})` : ''}`,
   });
   res.json({ token, user: { id: user.id, username: user.username, role: user.role, name: user.name } });
+}));
+
+/**
+ * Is this session still good? The phone app asks every time it is opened or
+ * brought back. authenticateToken has already refused a deactivated account,
+ * a reset password or an expired session (401, and the app signs out). A
+ * stay-signed-in session gets a fresh token, so it lasts another
+ * STAY_SIGNED_IN_EXPIRY from today.
+ */
+app.post('/api/auth/session', authenticateToken, route((req, res) => {
+  const user = db.prepare('SELECT id, username, role, name, token_version FROM users WHERE id = ?').get(req.user.id) as any;
+  res.json({
+    user: { id: user.id, username: user.username, role: user.role, name: user.name },
+    ...(req.staySignedIn ? { token: issueToken(user, true) } : {}),
+  });
 }));
 
 // --- Settings Routes ---
@@ -928,6 +1093,7 @@ app.put('/api/admin/account', authenticateToken, requireAdmin, route((req, res) 
     res.status(404).json({ error: 'Admin account not found' });
     return;
   }
+  if (adminUser.env_managed) fail(ENV_ACCOUNT_MESSAGE);
 
   // Throttle this too: it is a second password oracle for the admin account.
   const key = throttleKey(req, `account:${adminUser.username}`);
@@ -1085,7 +1251,7 @@ app.post('/api/backups/google/disconnect', authenticateToken, requireAdmin, rout
 // never changes afterwards: promoting a cashier means a new admin account, so
 // the audit log always says plainly who could do what when.
 
-const STAFF_COLUMNS = 'id, username, role, name, is_active';
+const STAFF_COLUMNS = 'id, username, role, name, is_active, env_managed';
 type StaffRole = 'admin' | 'cashier';
 
 const readStaff = (id: number | bigint) =>
@@ -1121,6 +1287,7 @@ const createStaffAccount = (req: express.Request, role: StaffRole) => {
  * own password is changed under My account, which asks for the current one.
  */
 const updateStaffAccount = (req: express.Request, account: any) => {
+  if (account.env_managed) fail(ENV_ACCOUNT_MESSAGE);
   const isSelf = account.id === req.user.id;
   const changes: string[] = [];
   let nextActive = account.is_active;
@@ -1208,6 +1375,7 @@ app.delete('/api/users/:id', authenticateToken, requireAdmin, route((req, res) =
     return;
   }
   if (account.id === req.user.id) fail('You cannot delete your own account.');
+  if (account.env_managed) fail(ENV_ACCOUNT_MESSAGE);
 
   db.transaction(() => {
     const { in_use } = db.prepare(`SELECT (${userInUseSql('?')}) AS in_use`)
@@ -1291,27 +1459,198 @@ app.get('/api/audit-logs', authenticateToken, requireAdmin, route(async (req, re
 
 // --- Item Routes ---
 // Columns the billing/scanning screens actually need. `SELECT *` also shipped
-// image_url (an arbitrary-length URL), barcode and created_at to every client
-// on every page load — dead weight in the payload and, for image_url,
-// unbounded. The Items admin screen asks for the full row via ?withImages=1.
+// image_url (an arbitrary-length URL) and created_at to every client on every
+// page load — dead weight in the payload and, for image_url, unbounded. The
+// Items admin screen asks for the full row via ?withImages=1. The barcode is
+// here because the billing screen matches scans against this list.
 const ITEM_LIST_COLUMNS =
-  'id, name, name_kn, hsn_code, price, metric, is_loose, gst_applicable, gst_mode, gst_rate, sgst_rate, cgst_rate, igst_rate, stock_quantity, default_profit_percent';
+  'id, name, name_kn, hsn_code, barcode, price, metric, is_loose, gst_applicable, gst_mode, gst_rate, sgst_rate, cgst_rate, igst_rate, stock_quantity, default_profit_percent, in_my_gst';
+
+/**
+ * The Items page's filters. Low stock is the same "under 10" the item cards
+ * flag; out of stock is nothing left.
+ */
+const ITEM_FILTERS = {
+  barcode: "barcode IS NOT NULL AND barcode <> ''",
+  no_barcode: "(barcode IS NULL OR barcode = '')",
+  low_stock: 'stock_quantity > 0 AND stock_quantity < 10',
+  out_of_stock: 'stock_quantity <= 0',
+} as const;
+type ItemFilter = keyof typeof ITEM_FILTERS;
+
+/** Most bulk prices one item can have. */
+const MAX_BULK_PRICES = 10;
+
+/** Each item's bulk prices, smallest quantity first. */
+const bulkPricesOf = (itemIds: number[]): Map<number, BulkPrice[]> => {
+  const byItem = new Map<number, BulkPrice[]>();
+  const ids = [...new Set(itemIds.map(Number).filter(Number.isInteger))];
+  if (!ids.length) return byItem;
+  // Whole numbers, so safe to write into the SQL; chunked under SQLite's limit.
+  for (let start = 0; start < ids.length; start += 500) {
+    const chunk = ids.slice(start, start + 500);
+    const rows = db.prepare(`
+      SELECT item_id, min_quantity, price FROM item_bulk_prices
+      WHERE item_id IN (${chunk.join(',')}) ORDER BY item_id, min_quantity
+    `).all() as Array<{ item_id: number; min_quantity: number; price: number }>;
+    for (const row of rows) {
+      const list = byItem.get(row.item_id) ?? [];
+      list.push({ min_quantity: row.min_quantity, price: row.price });
+      byItem.set(row.item_id, list);
+    }
+  }
+  return byItem;
+};
+
+/** The items with their bulk prices attached (an empty list for none). */
+const withBulkPrices = <T extends { id: number }>(items: T[]): Array<T & { bulk_prices: BulkPrice[] }> => {
+  const byItem = bulkPricesOf(items.map((item) => item.id));
+  return items.map((item) => ({ ...item, bulk_prices: byItem.get(item.id) ?? [] }));
+};
 
 app.get('/api/items', authenticateToken, route((req, res) => {
   const { limit, offset } = readPaging(req);
   const search = optString(req.query.search, 'search', 100);
   const withImages = req.query.withImages === '1';
   const columns = withImages ? '*' : ITEM_LIST_COLUMNS;
+  const filter = req.query.filter == null || req.query.filter === ''
+    ? null
+    : oneOf(req.query.filter, Object.keys(ITEM_FILTERS) as ItemFilter[], 'filter');
 
-  const where = search ? 'WHERE name LIKE ? OR hsn_code LIKE ?' : '';
-  const params = search ? [`%${search}%`, `%${search}%`] : [];
+  let searchClause: string | null = search ? '(name LIKE ? OR name_kn LIKE ? OR hsn_code LIKE ? OR barcode LIKE ?)' : null;
+  let searchParams: unknown[] = search ? [`%${search}%`, `%${search}%`, `%${search}%`, `%${normalizeBarcode(search)}%`] : [];
+  let orderBy = 'name ASC';
+  // Nothing contains what was typed: the closest names instead ("suger" →
+  // Sugar), best first. See src/lib/fuzzy.ts.
+  let closeMatch = false;
+  if (search && !(db.prepare(`SELECT 1 FROM items WHERE ${searchClause} LIMIT 1`).get(...searchParams))) {
+    const all = db.prepare('SELECT id, name, name_kn FROM items').all() as Array<{ id: number; name: string; name_kn: string | null }>;
+    const ids = searchList(all, search, { names: (row) => [row.name, row.name_kn] }).slice(0, 100).map((row) => Number(row.id));
+    if (ids.length) {
+      closeMatch = true;
+      // Whole numbers read from the table, so safe to write into the SQL.
+      searchClause = `id IN (${ids.join(',')})`;
+      searchParams = [];
+      orderBy = `CASE id ${ids.map((itemId, index) => `WHEN ${itemId} THEN ${index}`).join(' ')} END`;
+    }
+  }
+  const whereOf = (...clauses: Array<string | null>) => {
+    const used = clauses.filter(Boolean);
+    return used.length ? `WHERE ${used.join(' AND ')}` : '';
+  };
+  const where = whereOf(searchClause, filter ? ITEM_FILTERS[filter] : null);
 
   const items = db.prepare(`
-    SELECT ${columns} FROM items ${where} ORDER BY name ASC LIMIT ? OFFSET ?
-  `).all(...params, limit, offset);
-  const { total } = db.prepare(`SELECT COUNT(*) as total FROM items ${where}`).get(...params) as any;
+    SELECT ${columns} FROM items ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?
+  `).all(...searchParams, limit, offset);
+  const { total } = db.prepare(`SELECT COUNT(*) as total FROM items ${where}`).get(...searchParams) as any;
 
-  res.json({ data: items, total, limit, offset });
+  // How many items each filter would show, within the search, for the
+  // Items page's filter buttons.
+  let counts: Record<string, number> | undefined;
+  if (req.query.counts === '1') {
+    const sums = (Object.entries(ITEM_FILTERS) as Array<[ItemFilter, string]>)
+      .map(([name, clause]) => `COALESCE(SUM(CASE WHEN ${clause} THEN 1 ELSE 0 END), 0) AS ${name}`)
+      .join(', ');
+    counts = db.prepare(`SELECT COUNT(*) AS all_items, ${sums} FROM items ${whereOf(searchClause)}`).get(...searchParams) as any;
+  }
+
+  res.json({
+    data: withBulkPrices(items as Array<{ id: number }>), total, limit, offset,
+    // Where this list is up to, for GET /api/items/changes. Read in the same
+    // synchronous call as the list, so nothing can change in between.
+    seq: itemChangeSeq(),
+    ...(counts ? { counts } : {}), ...(closeMatch ? { close_match: true } : {}),
+  });
+}));
+
+/** The number of the latest change to any item (see trackItemChanges in db/index.ts). */
+const itemChangeSeq = () =>
+  ((db.prepare("SELECT last_value FROM document_counters WHERE scope = 'ITEMS'").get() as { last_value: number } | undefined)?.last_value ?? 0);
+
+/** More changed items than this in one answer, and the till reloads its list instead. */
+const MAX_ITEM_CHANGES = 500;
+
+/**
+ * What changed in the catalogue after `since`: the items (as the list shows
+ * them) and the ids of items deleted. Every till asks this every few seconds,
+ * so its copy of the catalogue — search, prices, stock — keeps up with sales,
+ * purchases and edits made on other computers. Without `since`, just where
+ * things are up to. `reset` means: reload the whole list (too much changed,
+ * or the database was restored to an earlier point).
+ */
+app.get('/api/items/changes', authenticateToken, route((req, res) => {
+  const seq = itemChangeSeq();
+  const raw = req.query.since;
+  if (raw == null || raw === '') {
+    res.json({ seq, items: [], deleted: [] });
+    return;
+  }
+  const since = Number(raw);
+  if (!Number.isInteger(since) || since < 0) fail('since must be a whole number');
+  if (since > seq) {
+    res.json({ seq, reset: true, items: [], deleted: [] });
+    return;
+  }
+  const items = db.prepare(`
+    SELECT ${ITEM_LIST_COLUMNS} FROM items WHERE change_seq > ? ORDER BY change_seq LIMIT ?
+  `).all(since, MAX_ITEM_CHANGES + 1) as Array<{ id: number }>;
+  if (items.length > MAX_ITEM_CHANGES) {
+    res.json({ seq, reset: true, items: [], deleted: [] });
+    return;
+  }
+  const deleted = (db.prepare('SELECT DISTINCT item_id FROM item_deletions WHERE seq > ?').all(since) as Array<{ item_id: number }>)
+    .map((row) => row.item_id);
+  res.json({ seq, items: withBulkPrices(items), deleted });
+}));
+
+/**
+ * The item with this barcode. The screens look in their own copy of the
+ * catalogue first; this is for a shop with more items than that copy holds.
+ */
+app.get('/api/items/barcode/:code', authenticateToken, route((req, res) => {
+  const code = normalizeBarcode(req.params.code);
+  const item = code ? db.prepare(`SELECT ${ITEM_LIST_COLUMNS} FROM items WHERE barcode = ?`).get(code) : undefined;
+  if (!item) {
+    res.status(404).json({ error: `No item has the barcode ${code}` });
+    return;
+  }
+  res.json(withBulkPrices([item as { id: number }])[0]);
+}));
+
+/** Refuse a barcode another item already has. */
+const assertBarcodeFree = (code: string, itemId: number | null) => {
+  const owner = db.prepare('SELECT id, name FROM items WHERE barcode = ?').get(code) as { id: number; name: string } | undefined;
+  if (owner && owner.id !== itemId) fail(`Barcode ${code} is already on ${owner.name}.`);
+};
+
+/**
+ * Give an item its barcode, change it, or remove it (''): how the Items page
+ * adds barcodes to items bought before they had one, a scan at a time.
+ */
+app.put('/api/items/:id/barcode', authenticateToken, requireAdmin, route((req, res) => {
+  const id = rowId(req.params.id);
+  if (req.body?.barcode === undefined) fail('Barcode is required');
+  const barcode = optBarcode(req.body.barcode);
+  const item = db.prepare('SELECT id, name, barcode FROM items WHERE id = ?').get(id) as { id: number; name: string; barcode: string | null } | undefined;
+  if (!item) {
+    res.status(404).json({ error: 'Item not found' });
+    return;
+  }
+  if (barcode) assertBarcodeFree(barcode, id);
+  db.prepare('UPDATE items SET barcode = ? WHERE id = ?').run(barcode, id);
+  if ((item.barcode || null) !== barcode) {
+    writeAuditLog({
+      user: req.user,
+      action: 'update',
+      entityType: 'item',
+      entityId: id,
+      details: barcode
+        ? `Set the barcode of ${item.name} to ${barcode}${item.barcode ? ` (was ${item.barcode})` : ''}`
+        : `Removed the barcode ${item.barcode} from ${item.name}`,
+    });
+  }
+  res.json({ success: true, barcode });
 }));
 
 /**
@@ -1322,6 +1661,15 @@ app.get('/api/items', authenticateToken, route((req, res) => {
 app.get('/api/items/kannada-names', authenticateToken, route((_req, res) => {
   const rows = db.prepare("SELECT name, name_kn FROM items WHERE name_kn IS NOT NULL AND name_kn <> ''").all() as Array<{ name: string; name_kn: string }>;
   const names: Record<string, string> = {};
+  // Customers' names first, so an item that shares a name keeps its own.
+  const customers = db.prepare(`
+    SELECT name, name_kn, shop_name, shop_name_kn FROM customers
+    WHERE (name_kn IS NOT NULL AND name_kn <> '') OR (shop_name_kn IS NOT NULL AND shop_name_kn <> '')
+  `).all() as Array<{ name: string | null; name_kn: string | null; shop_name: string | null; shop_name_kn: string | null }>;
+  for (const customer of customers) {
+    if (customer.name && customer.name_kn) names[customer.name] = customer.name_kn;
+    if (customer.shop_name && customer.shop_name_kn) names[customer.shop_name] = customer.shop_name_kn;
+  }
   for (const row of rows) names[row.name] = row.name_kn;
   res.json({ names, ...itemNames.status() });
 }));
@@ -1330,6 +1678,77 @@ app.get('/api/items/kannada-names', authenticateToken, route((_req, res) => {
 app.post('/api/items/translate', authenticateToken, requireAdmin, route(async (_req, res) => {
   const { translated } = await itemNames.runNow();
   res.json({ translated, ...itemNames.status() });
+}));
+
+/**
+ * Add the items already on the shelves, with the stock on hand, in one go:
+ * how a shop that is already trading starts using the app. The rows are the
+ * import screen's (src/lib/itemImport.ts checks them there and here).
+ *
+ * All or nothing. With `check_only`, or when any row has a problem, nothing
+ * is saved and the problems come back by row. The stock goes in as opening
+ * stock, not a purchase: no supplier, no payment, no GST input claimed.
+ */
+app.post(IMPORT_PATH, authenticateToken, requireAdmin, route((req, res) => {
+  const sent = Array.isArray(req.body?.rows) ? req.body.rows : null;
+  if (!sent) fail('rows must be a list');
+  const rows = sent!.map(toImportRow);
+  if (rows.length > MAX_IMPORT_ROWS) fail(`At most ${MAX_IMPORT_ROWS} items can be imported at once. Split the list into parts.`);
+  if (rows.length === 0 || rows.every(isBlankRow)) fail('There are no items to import.');
+
+  const catalogue = db.prepare('SELECT name, barcode FROM items').all() as Array<{ name: string; barcode: string | null }>;
+  const existing = new Set(catalogue.map((item) => importNameKey(item.name)));
+  const existingBarcodes = new Map(catalogue.filter((item) => item.barcode).map((item) => [item.barcode!, item.name]));
+  const checked = checkImportRows(rows, existing, existingBarcodes);
+  const problems = checked.flatMap((row, index) =>
+    isBlankRow(rows[index]) ? [] : row.problems.map((problem) => ({ row: index, ...problem }))
+  );
+  const items = checked.flatMap((row, index) => (row.item && !isBlankRow(rows[index]) ? [row.item] : []));
+  const blocked = checked.some((row, index) => !isBlankRow(rows[index]) && blocking(row).length > 0);
+  if (blocked || req.body?.check_only === true) {
+    res.json({ ok: !blocked, saved: false, count: items.length, problems });
+    return;
+  }
+
+  const insertItem = db.prepare(`
+    INSERT INTO items (name, name_kn, hsn_code, barcode, price, metric, is_loose, gst_applicable, gst_mode, gst_rate,
+                       sgst_rate, cgst_rate, igst_rate, stock_quantity, default_profit_percent, in_my_gst)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'split', ?, ?, ?, 0, 0, ?, ?)
+  `);
+  const insertBatch = db.prepare(`
+    INSERT INTO stock_batches (item_id, source, quantity_received, quantity_remaining, unit_cost, selling_price)
+    VALUES (?, 'opening', ?, ?, ?, ?)
+  `);
+  const saved = db.transaction(() => {
+    let stockValue = 0;
+    for (const item of items) {
+      const half = round2(item.gst_rate / 2);
+      const created = insertItem.run(
+        item.name, item.name_kn, item.hsn_code, item.barcode, item.selling_price, item.metric, isLooseUnit(item.metric) ? 1 : 0,
+        item.gst_rate > 0 ? 1 : 0, item.gst_rate, half, half,
+        profitPercentFromSellingPrice(item.unit_cost, item.selling_price, item.gst_rate),
+        item.in_my_gst ? 1 : 0
+      );
+      const id = Number(created.lastInsertRowid);
+      if (item.quantity > 0) {
+        insertBatch.run(id, item.quantity, item.quantity, item.unit_cost, item.selling_price);
+        stockValue += item.quantity * item.selling_price;
+      }
+      syncItemStock(id);
+    }
+    return { stockValue: round2(stockValue) };
+  })();
+
+  analyticsCache = null;
+  itemNames.kick();
+  writeAuditLog({
+    user: req.user,
+    action: 'create',
+    entityType: 'item',
+    entityId: null,
+    details: `Imported ${items.length} item(s) with opening stock worth ₹${saved.stockValue.toFixed(2)} at selling price`,
+  });
+  res.status(201).json({ ok: true, saved: true, count: items.length, problems });
 }));
 
 /**
@@ -1380,19 +1799,28 @@ app.put('/api/items/:id', authenticateToken, requireAdmin, route((req, res) => {
   // translated again.
   const typedKannada = req.body?.name_kn === undefined ? undefined : optString(req.body.name_kn, 'Kannada name', 200) || null;
   const name_kn = typedKannada !== undefined ? typedKannada : item.name === existingItem.name ? existingItem.name_kn : null;
+  // The barcode as sent ('' removes it); left out, it stays as it was.
+  const barcode = req.body?.barcode === undefined ? existingItem.barcode ?? null : optBarcode(req.body.barcode);
+  if (barcode) assertBarcodeFree(barcode, id);
+  // Include in my GST, as sent; left out, it stays as it was.
+  const in_my_gst = req.body?.in_my_gst === undefined ? (existingItem.in_my_gst ?? 1) : bool(req.body.in_my_gst);
 
   db.prepare(`
-    UPDATE items SET name = ?, name_kn = ?, hsn_code = ?, metric = ?, is_loose = ?, gst_applicable = ?, gst_mode = ?, gst_rate = ?, sgst_rate = ?, cgst_rate = ?, igst_rate = ?, image_url = ?
+    UPDATE items SET name = ?, name_kn = ?, hsn_code = ?, barcode = ?, metric = ?, is_loose = ?, gst_applicable = ?, gst_mode = ?, gst_rate = ?, sgst_rate = ?, cgst_rate = ?, igst_rate = ?, image_url = ?, in_my_gst = ?
     WHERE id = ?
-  `).run(item.name, name_kn, item.hsn_code, item.metric, item.is_loose, item.gst_applicable, item.gst_mode, item.gst_rate, item.sgst_rate, item.cgst_rate, item.igst_rate, item.image_url, id);
+  `).run(item.name, name_kn, item.hsn_code, barcode, item.metric, item.is_loose, item.gst_applicable, item.gst_mode, item.gst_rate, item.sgst_rate, item.cgst_rate, item.igst_rate, item.image_url, in_my_gst, id);
   if (name_kn === null) itemNames.kick();
 
+  const barcodeChange = (existingItem.barcode || null) === barcode
+    ? ''
+    : barcode ? `; barcode ${barcode}` : '; barcode removed';
+  const myGstChange = (existingItem.in_my_gst ?? 1) === in_my_gst ? '' : in_my_gst ? '; included in my GST' : '; left out of my GST';
   writeAuditLog({
     user: req.user,
     action: 'update',
     entityType: 'item',
     entityId: id,
-    details: `Updated item ${existingItem.name} to ${item.name}`,
+    details: `Updated item ${existingItem.name} to ${item.name}${barcodeChange}${myGstChange}`,
   });
   res.json({ success: true });
 }));
@@ -1424,6 +1852,7 @@ app.delete('/api/items/:id', authenticateToken, requireAdmin, route((req, res) =
   db.transaction(() => {
     db.prepare('DELETE FROM stock_adjustments WHERE item_id = ?').run(id);
     db.prepare('DELETE FROM stock_batches WHERE item_id = ?').run(id);
+    db.prepare('DELETE FROM item_bulk_prices WHERE item_id = ?').run(id);
     db.prepare('DELETE FROM items WHERE id = ?').run(id);
   })();
   writeAuditLog({
@@ -1457,6 +1886,20 @@ app.get('/api/items/:id/batches', authenticateToken, route((req, res) => {
   const includeSoldOut = req.query.all === '1';
   const isAdmin = req.user.role === 'admin';
   const gstRate = saleGstRate(item);
+  // Editing a bill: its own units count as on the shelf again, as they will
+  // be when the edit is saved, so the till can keep them on the bill.
+  const excludingBill = req.query.excluding_bill == null || req.query.excluding_bill === ''
+    ? null
+    : rowId(req.query.excluding_bill, 'Bill');
+  const heldByBill = new Map<number, number>(
+    excludingBill
+      ? (db.prepare(`
+          SELECT bib.batch_id, SUM(bib.quantity) AS quantity
+          FROM bill_item_batches bib JOIN bill_items bi ON bi.id = bib.bill_item_id
+          WHERE bi.bill_id = ? AND bi.item_id = ? GROUP BY bib.batch_id
+        `).all(excludingBill, id) as Array<{ batch_id: number; quantity: number }>).map((row) => [row.batch_id, row.quantity])
+      : []
+  );
 
   const batches = (db.prepare(`
     SELECT b.id, b.source, b.received_at, b.quantity_received, b.quantity_remaining,
@@ -1464,9 +1907,12 @@ app.get('/api/items/:id/batches', authenticateToken, route((req, res) => {
            p.purchase_number, p.supplier_name, p.invoice_number
     FROM stock_batches b
     LEFT JOIN purchases p ON p.id = b.purchase_id
-    WHERE b.item_id = ? ${includeSoldOut ? '' : 'AND b.quantity_remaining > 0'}
+    WHERE b.item_id = ? ${includeSoldOut || excludingBill ? '' : 'AND b.quantity_remaining > 0'}
     ORDER BY b.received_at ASC, b.id ASC
-  `).all(id) as any[]).map((batch) => {
+  `).all(id) as any[])
+    .map((batch) => ({ ...batch, quantity_remaining: round3(batch.quantity_remaining + (heldByBill.get(batch.id) ?? 0)) }))
+    .filter((batch) => includeSoldOut || batch.quantity_remaining > 0)
+    .map((batch) => {
     if (!isAdmin) {
       const { unit_cost: _cost, ...visible } = batch;
       return visible;
@@ -1474,7 +1920,54 @@ app.get('/api/items/:id/batches', authenticateToken, route((req, res) => {
     return { ...batch, profit_percent: profitPercentFromSellingPrice(batch.unit_cost, batch.selling_price, gstRate) };
   });
 
-  res.json({ item, data: batches });
+  // The bulk prices too: billing prices the item from this read.
+  res.json({ item: withBulkPrices([item])[0], data: batches });
+}));
+
+/**
+ * Replace an item's bulk prices with the list sent ([] removes them all):
+ * "10 or more at ₹45 each". Prices include GST, like every selling price.
+ */
+app.put('/api/items/:id/bulk-prices', authenticateToken, requireAdmin, route((req, res) => {
+  const id = rowId(req.params.id);
+  const item = db.prepare('SELECT id, name, metric FROM items WHERE id = ?').get(id) as { id: number; name: string; metric: string } | undefined;
+  if (!item) {
+    res.status(404).json({ error: 'Item not found' });
+    return;
+  }
+  const sent = req.body?.bulk_prices;
+  if (!Array.isArray(sent)) fail('Send the bulk prices as a list');
+  if (sent.length > MAX_BULK_PRICES) fail(`At most ${MAX_BULK_PRICES} bulk prices per item`);
+
+  const rules: BulkPrice[] = sent
+    .map((rule: any) => ({
+      min_quantity: round3(num(rule?.min_quantity, 'Bulk quantity', { min: 0.001, max: 1_000_000 })),
+      price: round2(num(rule?.price, 'Bulk price', { min: 0.01, max: 10_000_000 })),
+    }))
+    .sort((a: BulkPrice, b: BulkPrice) => a.min_quantity - b.min_quantity);
+  if (rules.some((rule) => rule.min_quantity <= 1)) fail('A bulk price must be for more than 1');
+  for (let index = 1; index < rules.length; index += 1) {
+    if (rules[index].min_quantity === rules[index - 1].min_quantity) fail('Each bulk price needs a different quantity');
+    if (rules[index].price > rules[index - 1].price) fail('A bigger quantity cannot have a higher bulk price');
+  }
+
+  const before = bulkPricesOf([id]).get(id) ?? [];
+  db.transaction(() => {
+    db.prepare('DELETE FROM item_bulk_prices WHERE item_id = ?').run(id);
+    const insert = db.prepare('INSERT INTO item_bulk_prices (item_id, min_quantity, price) VALUES (?, ?, ?)');
+    for (const rule of rules) insert.run(id, rule.min_quantity, rule.price);
+  })();
+
+  const describe = (list: BulkPrice[]) =>
+    list.length ? list.map((rule) => `${rule.min_quantity}+ ${item.metric} @ ₹${rule.price.toFixed(2)}`).join(', ') : 'none';
+  writeAuditLog({
+    user: req.user,
+    action: 'update',
+    entityType: 'item',
+    entityId: id,
+    details: `Bulk prices for ${item.name}: ${describe(before)} → ${describe(rules)}`,
+  });
+  res.json({ bulk_prices: rules });
 }));
 
 /**
@@ -1532,7 +2025,8 @@ app.post('/api/items/:id/stock-adjustments', authenticateToken, requireAdmin, ro
       const latest = db.prepare(`
         SELECT unit_cost, selling_price FROM stock_batches WHERE item_id = ? ORDER BY received_at DESC, id DESC LIMIT 1
       `).get(id) as any;
-      const sellingPrice = requestedPrice ?? latest?.selling_price;
+      // With no batch yet (or none left after starting fresh), the item's own price.
+      const sellingPrice = requestedPrice ?? latest?.selling_price ?? (item.price > 0 ? item.price : undefined);
       if (sellingPrice == null) {
         throw new ValidationError(`${item.name} has never been purchased, so enter the selling price for this stock`);
       }
@@ -1617,20 +2111,34 @@ app.get('/api/customers', authenticateToken, route((req, res) => {
   const { limit, offset } = readPaging(req);
   const search = optString(req.query.search, 'search', 100);
 
-  const where = search ? 'WHERE shop_name LIKE ? OR name LIKE ? OR phone LIKE ?' : '';
-  const params = search ? [`%${search}%`, `%${search}%`, `%${search}%`] : [];
-
+  let where = search ? 'WHERE shop_name LIKE ? OR name LIKE ? OR phone LIKE ? OR shop_name_kn LIKE ? OR name_kn LIKE ?' : '';
+  let params: unknown[] = search ? Array(5).fill(`%${search}%`) : [];
   // Alphabetical by bakery, so the list reads the way the shop talks. Sorting
   // by the person's name scattered a bakery's entry wherever its owner's first
   // name happened to fall.
+  let orderBy = `lower(${CUSTOMER_DISPLAY_SQL()}) ASC, id ASC`;
+  // Nothing contains what was typed: the closest names instead, best first.
+  let closeMatch = false;
+  if (search && !db.prepare(`SELECT 1 FROM customers ${where} LIMIT 1`).get(...params)) {
+    const all = db.prepare('SELECT id, name, shop_name, name_kn, shop_name_kn FROM customers').all() as Array<Record<string, any>>;
+    const ids = searchList(all, search, { names: (row) => [row.shop_name, row.name, row.shop_name_kn, row.name_kn] })
+      .slice(0, 100).map((row) => Number(row.id));
+    if (ids.length) {
+      closeMatch = true;
+      where = `WHERE id IN (${ids.join(',')})`;
+      params = [];
+      orderBy = `CASE id ${ids.map((customerId, index) => `WHEN ${customerId} THEN ${index}`).join(' ')} END`;
+    }
+  }
+
   const customers = db.prepare(`
     SELECT * FROM customers ${where}
-    ORDER BY lower(${CUSTOMER_DISPLAY_SQL()}) ASC, id ASC
+    ORDER BY ${orderBy}
     LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
   const { total } = db.prepare(`SELECT COUNT(*) as total FROM customers ${where}`).get(...params) as any;
 
-  res.json({ data: customers, total, limit, offset });
+  res.json({ data: customers, total, limit, offset, ...(closeMatch ? { close_match: true } : {}) });
 }));
 
 // Cheap counts for the sidebar badges, so the shell doesn't need the full
@@ -1718,6 +2226,7 @@ app.post('/api/customers', authenticateToken, route((req, res) => {
     entityId: Number(result.lastInsertRowid),
     details: `Created customer ${customerDisplayName(customer)}`,
   });
+  itemNames.kick();
   res.json({ id: Number(result.lastInsertRowid) });
 }));
 
@@ -1751,9 +2260,12 @@ app.put('/api/customers/:id', authenticateToken, route((req, res) => {
   const update = db.transaction(() => {
     db.prepare(`
       UPDATE customers
-      SET name = ?, phone = ?, shop_name = ?, address = ?, gstin = ?
+      SET name = ?, phone = ?, shop_name = ?, address = ?, gstin = ?,
+          -- A changed name is written in Kannada again.
+          name_kn = CASE WHEN name IS ? THEN name_kn ELSE NULL END,
+          shop_name_kn = CASE WHEN shop_name IS ? THEN shop_name_kn ELSE NULL END
       WHERE id = ?
-    `).run(customer.name, customer.phone, customer.shop_name, customer.address, customer.gstin, id);
+    `).run(customer.name, customer.phone, customer.shop_name, customer.address, customer.gstin, customer.name, customer.shop_name, id);
 
     if (balanceChanged) {
       recordCreditChange({
@@ -1766,6 +2278,7 @@ app.put('/api/customers/:id', authenticateToken, route((req, res) => {
     }
   });
   update();
+  itemNames.kick();
   writeAuditLog({
     user: req.user,
     action: 'update',
@@ -1836,6 +2349,16 @@ app.post('/api/customers/:id/credit-payments', authenticateToken, route((req, re
 }));
 
 /** A customer's credit statement: when the balance moved, by how much, and why. */
+/** One customer, as the list shows them: for a bill opened for editing. */
+app.get('/api/customers/:id', authenticateToken, route((req, res) => {
+  const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(rowId(req.params.id));
+  if (!customer) {
+    res.status(404).json({ error: 'Customer not found' });
+    return;
+  }
+  res.json(customer);
+}));
+
 app.get('/api/customers/:id/credit-entries', authenticateToken, route((req, res) => {
   const id = rowId(req.params.id);
   const { limit, offset } = readPaging(req);
@@ -2219,33 +2742,29 @@ const MAX_BILL_LINE_ITEMS = 500;
 // Tolerance for comparing client-supplied money against server-computed money.
 const MONEY_EPSILON = 0.01;
 
-app.post('/api/bills', authenticateToken, route((req, res) => {
-  const { items } = req.body ?? {};
+/** A bill as sent by the till: what to sell, to whom, and how it is paid. */
+type BillInput = ReturnType<typeof readBillInput>;
 
-  // --- Basic request validation ---
-  if (!Array.isArray(items) || items.length === 0) {
-    res.status(400).json({ error: 'At least one item is required to create a bill' });
-    return;
-  }
-  if (items.length > MAX_BILL_LINE_ITEMS) {
-    res.status(400).json({ error: `A bill cannot have more than ${MAX_BILL_LINE_ITEMS} line items` });
-    return;
-  }
+/** Check a bill request (new or edited). Amounts are worked out later, from the batches. */
+const readBillInput = (body: any) => {
+  const items = body?.items;
+  if (!Array.isArray(items) || items.length === 0) fail('At least one item is required to create a bill');
+  if (items.length > MAX_BILL_LINE_ITEMS) fail(`A bill cannot have more than ${MAX_BILL_LINE_ITEMS} line items`);
 
-  const payment_method = oneOf(req.body?.payment_method, ['cash', 'upi', 'credit', 'split'] as const, 'Payment method');
-  const customer_id = optRowId(req.body?.customer_id, 'Customer');
-  const safeDiscount = num(req.body?.discount_amount, 'Discount', { min: 0, max: 100_000_000, fallback: 0 });
+  const payment_method = oneOf(body?.payment_method, ['cash', 'upi', 'credit', 'split'] as const, 'Payment method');
+  const customer_id = optRowId(body?.customer_id, 'Customer');
+  const discount = num(body?.discount_amount, 'Discount', { min: 0, max: 100_000_000, fallback: 0 });
 
   // Each of these was previously written to the ledger straight from the
   // request body with no checks at all. A negative credit_amount subtracted
   // from a customer's outstanding balance — a one-request debt write-off — and
   // a cash_amount unrelated to the total let a sale be recorded as ₹0 collected
   // while the stock still left the shelf.
-  const requestedCash = num(req.body?.cash_amount, 'Cash amount', { min: 0, max: 100_000_000, fallback: 0 });
-  const requestedUpi = num(req.body?.upi_amount, 'UPI amount', { min: 0, max: 100_000_000, fallback: 0 });
-  const requestedCredit = num(req.body?.credit_amount, 'Credit amount', { min: 0, max: 100_000_000, fallback: 0 });
+  const requestedCash = num(body?.cash_amount, 'Cash amount', { min: 0, max: 100_000_000, fallback: 0 });
+  const requestedUpi = num(body?.upi_amount, 'UPI amount', { min: 0, max: 100_000_000, fallback: 0 });
+  const requestedCredit = num(body?.credit_amount, 'Credit amount', { min: 0, max: 100_000_000, fallback: 0 });
 
-  const parsedItems = items.map((item: any) => ({
+  const parsedItems = (items as any[]).map((item: any) => ({
     id: rowId(item?.id, 'Item id'),
     quantity: round3(num(item?.quantity, 'Quantity', { min: 0, max: 1_000_000 })),
     // Prices are not set at billing: each unit is charged the selling price of
@@ -2257,162 +2776,188 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
         ? null
         : round2(num(item.unit_price, 'Price', { min: 0.01, max: 10_000_000 })),
   }));
-  if (parsedItems.some((item) => item.quantity <= 0)) {
-    fail('Every item needs a quantity greater than 0');
-  }
+  if (parsedItems.some((item) => item.quantity <= 0)) fail('Every item needs a quantity greater than 0');
 
-  // The grand total the till showed the cashier. Prices now come from batches,
+  // The grand total the till showed the cashier. Prices come from batches,
   // and another sale can use up a batch between the item going into the cart
   // and the bill being saved — so without this check the customer could be
   // charged a different amount from the one on screen.
-  // Queue the bill for the counter's receipt printer — how a bill saved on a
-  // phone gets printed at the counter. In the same transaction as the bill.
-  const printAtCounter = req.body?.print_at_counter === true;
-
   const expectedTotal =
-    req.body?.expected_total == null || req.body?.expected_total === ''
+    body?.expected_total == null || body?.expected_total === ''
       ? null
-      : num(req.body.expected_total, 'Expected total', { min: 0, max: 1_000_000_000 });
+      : num(body.expected_total, 'Expected total', { min: 0, max: 1_000_000_000 });
 
-  if (customer_id) {
-    const customerExists = db.prepare('SELECT id FROM customers WHERE id = ?').get(customer_id);
-    if (!customerExists) {
-      res.status(400).json({ error: 'Customer not found' });
-      return;
-    }
-  }
+  if (customer_id && !db.prepare('SELECT id FROM customers WHERE id = ?').get(customer_id)) fail('Customer not found');
 
-  const transaction = db.transaction(() => {
-    const bill_number = nextDocumentNumber('INV');
-    // Recompute price/tax/stock from the authoritative items table rather
-    // than trusting the amounts the client sent — a client-supplied price
-    // could otherwise be tampered with (e.g. via devtools/Postman) to
-    // under-record revenue while still deducting real stock.
-    let subtotal_amount = 0;
-    let tax_amount = 0;
+  return {
+    parsedItems, payment_method, customer_id, discount, requestedCash, requestedUpi, requestedCredit, expectedTotal,
+    // Queue the bill for the counter's receipt printer — how a bill saved on a
+    // phone gets printed at the counter. In the same transaction as the bill.
+    printAtCounter: body?.print_at_counter === true,
+  };
+};
 
-    // One entry per bill line to write. A requested line can become several
-    // when its quantity crosses from one batch into a dearer one.
-    const lineItems: Array<{
-      item_id: number;
-      amounts: ReturnType<typeof computeLine>;
-      rates: ReturnType<typeof lineGstRates>;
-      allocations: Array<{ batch_id: number; quantity: number }>;
-    }> = [];
-    const touchedItems = new Set<number>();
+/** The bill being edited: what recordBill keeps (number, date) and replaces. */
+type BillBeingEdited = { id: number; bill_number: string; customer_id: number | null; credit_amount: number };
 
-    const selectItem = db.prepare('SELECT * FROM items WHERE id = ?');
-    const selectBatches = db.prepare(`
-      SELECT id, quantity_remaining, selling_price, unit_cost
-      FROM stock_batches
-      WHERE item_id = ? AND quantity_remaining > 0
-      ORDER BY received_at ASC, id ASC
-    `);
-    // What this bill has already taken from each batch, so the same item on
-    // two lines of one bill carries on down the FIFO queue instead of selling
-    // the same units twice.
-    const takenThisBill = new Map<number, number>();
-    const batchCost = new Map<number, number | null>();
+/**
+ * Price a bill from the batches (FIFO, bulk prices), take the stock and record
+ * it — or, with `editing`, record it in place of that bill, keeping its number
+ * and date. MUST be called inside a db.transaction().
+ */
+const recordBill = (input: BillInput, user: { id: number; name: string }, editing?: BillBeingEdited) => {
+  const { parsedItems, payment_method, customer_id, discount: safeDiscount, requestedCash, requestedUpi, requestedCredit, expectedTotal } = input;
+  const bill_number = editing ? editing.bill_number : nextBillNumber();
+  // Recompute price/tax/stock from the authoritative items table rather
+  // than trusting the amounts the client sent — a client-supplied price
+  // could otherwise be tampered with (e.g. via devtools/Postman) to
+  // under-record revenue while still deducting real stock.
+  let subtotal_amount = 0;
+  let tax_amount = 0;
 
-    for (const item of parsedItems) {
-      const dbItem = selectItem.get(item.id) as any;
-      if (!dbItem) {
-        throw new ValidationError(`Item not found: ${item.id}`);
-      }
+  // One entry per bill line to write. A requested line can become several
+  // when its quantity crosses from one batch into a dearer one.
+  const lineItems: Array<{
+    item_id: number;
+    amounts: ReturnType<typeof computeLine>;
+    rates: ReturnType<typeof lineGstRates>;
+    allocations: Array<{ batch_id: number; quantity: number }>;
+  }> = [];
+  const touchedItems = new Set<number>();
 
-      const batches = (selectBatches.all(item.id) as any[]).map((batch) => {
-        batchCost.set(batch.id, batch.unit_cost);
-        return { ...batch, quantity_remaining: round3(batch.quantity_remaining - (takenThisBill.get(batch.id) ?? 0)) };
-      });
-      const { allocations, shortfall } = allocateFifo(batches, item.quantity);
-      if (shortfall > 0) {
-        const available = round3(batches.reduce((acc, batch) => acc + Math.max(0, batch.quantity_remaining), 0));
-        throw new ValidationError(
-          `Insufficient stock for ${dbItem.name}: requested ${item.quantity}, only ${available} available`
-        );
-      }
-      for (const allocation of allocations) {
-        takenThisBill.set(allocation.batch_id, round3((takenThisBill.get(allocation.batch_id) ?? 0) + allocation.quantity));
-      }
-      touchedItems.add(dbItem.id);
+  const selectItem = db.prepare('SELECT * FROM items WHERE id = ?');
+  const selectBatches = db.prepare(`
+    SELECT id, quantity_remaining, selling_price, unit_cost
+    FROM stock_batches
+    WHERE item_id = ? AND quantity_remaining > 0
+    ORDER BY received_at ASC, id ASC
+  `);
+  // What this bill has already taken from each batch, so the same item on
+  // two lines of one bill carries on down the FIFO queue instead of selling
+  // the same units twice.
+  const takenThisBill = new Map<number, number>();
+  const batchCost = new Map<number, number | null>();
+  // A bulk price goes by how much of the item is on the whole bill, even if
+  // it was entered on two lines.
+  const quantityOnBill = new Map<number, number>();
+  for (const item of parsedItems) quantityOnBill.set(item.id, round3((quantityOnBill.get(item.id) ?? 0) + item.quantity));
+  const bulkPrices = bulkPricesOf([...quantityOnBill.keys()]);
 
-      const segments = priceSegments(allocations);
-      if (item.unit_price != null && !(segments.length === 1 && segments[0].unit_price === item.unit_price)) {
-        const fifoPrices = segments.map((segment) => `${segment.quantity} @ ₹${segment.unit_price.toFixed(2)}`).join(' + ');
-        throw new ValidationError(
-          `The price of ${dbItem.name} cannot be changed at billing (it sells as ${fifoPrices}). ` +
-            'Change the selling price in Items → Stock & prices.'
-        );
-      }
-
-      for (const segment of segments) {
-        const amounts = computeLine(dbItem, segment.unit_price, segment.quantity);
-        subtotal_amount += amounts.taxable_amount;
-        tax_amount += amounts.sgst_amount + amounts.cgst_amount + amounts.igst_amount;
-        lineItems.push({
-          item_id: dbItem.id,
-          amounts,
-          rates: lineGstRates(dbItem),
-          allocations: segment.allocations.map(({ batch_id, quantity }) => ({ batch_id, quantity })),
-        });
-      }
+  for (const item of parsedItems) {
+    const dbItem = selectItem.get(item.id) as any;
+    if (!dbItem) {
+      throw new ValidationError(`Item not found: ${item.id}`);
     }
 
-    subtotal_amount = round2(subtotal_amount);
-    tax_amount = round2(tax_amount);
-
-    if (safeDiscount > subtotal_amount + tax_amount) {
-      throw new ValidationError('Discount cannot exceed the bill subtotal');
+    const batches = (selectBatches.all(item.id) as any[]).map((batch) => {
+      batchCost.set(batch.id, batch.unit_cost);
+      return { ...batch, quantity_remaining: round3(batch.quantity_remaining - (takenThisBill.get(batch.id) ?? 0)) };
+    });
+    const { allocations, shortfall } = allocateFifo(batches, item.quantity);
+    if (shortfall > 0) {
+      const available = round3(batches.reduce((acc, batch) => acc + Math.max(0, batch.quantity_remaining), 0));
+      throw new ValidationError(
+        `Insufficient stock for ${dbItem.name}: requested ${item.quantity}, only ${available} available`
+      );
     }
-    // The shop settles in whole rupees and rounds DOWN, so the payable is
-    // floored and the dropped paise become the invoice's Round Off line.
-    // Storing the floored figure (rather than the exact one) keeps printed,
-    // recorded and collected amounts identical — otherwise the cash drawer
-    // never reconciles against the ledger.
-    const grossTotal = round2(subtotal_amount + tax_amount - safeDiscount);
-    const total_amount = Math.floor(grossTotal);
-
-    // --- Reconcile the payment split against the authoritative total ---
-    //
-    // The tender amounts must account for exactly the money owed. Anything
-    // else is either a UI bug or someone under-recording a sale.
-    let cash_amount = 0;
-    let upi_amount = 0;
-    let credit_amount = 0;
-
-    if (payment_method === 'cash') {
-      cash_amount = total_amount;
-    } else if (payment_method === 'upi') {
-      upi_amount = total_amount;
-    } else if (payment_method === 'credit') {
-      credit_amount = total_amount;
-    } else {
-      // Split: honour the client's breakdown, but only if it adds up.
-      const tendered = round2(requestedCash + requestedUpi + requestedCredit);
-      if (Math.abs(tendered - total_amount) > MONEY_EPSILON) {
-        throw new ValidationError(
-          `Payment split (₹${tendered.toFixed(2)}) does not match the bill total (₹${total_amount.toFixed(2)})`
-        );
-      }
-      cash_amount = round2(requestedCash);
-      upi_amount = round2(requestedUpi);
-      // Absorb rounding into credit so the three always sum to the total.
-      credit_amount = round2(total_amount - cash_amount - upi_amount);
-      if (credit_amount < 0) credit_amount = 0;
+    for (const allocation of allocations) {
+      takenThisBill.set(allocation.batch_id, round3((takenThisBill.get(allocation.batch_id) ?? 0) + allocation.quantity));
     }
+    touchedItems.add(dbItem.id);
 
-    // Credit is an unsecured loan from the shop; it needs a named debtor.
-    if (credit_amount > 0 && !customer_id) {
-      throw new ValidationError('Credit can only be given to registered customers');
-    }
-
-    if (expectedTotal != null && Math.abs(expectedTotal - total_amount) > 0.001) {
-      throw new ConflictError(
-        `Prices or stock changed while this bill was open: it showed ₹${expectedTotal.toFixed(2)} but is now ₹${total_amount.toFixed(2)}. The bill has been refreshed — please check it and save again.`,
-        'PRICE_CHANGED'
+    const bulk = bulkPriceFor(bulkPrices.get(item.id), quantityOnBill.get(item.id) ?? item.quantity);
+    const segments = priceSegments(applyBulkPrice(allocations, bulk));
+    if (item.unit_price != null && !(segments.length === 1 && segments[0].unit_price === item.unit_price)) {
+      const fifoPrices = segments.map((segment) => `${segment.quantity} @ ₹${segment.unit_price.toFixed(2)}`).join(' + ');
+      throw new ValidationError(
+        `The price of ${dbItem.name} cannot be changed at billing (it sells as ${fifoPrices}). ` +
+          'Change the selling price in Items → Stock & prices.'
       );
     }
 
+    for (const segment of segments) {
+      const amounts = computeLine(dbItem, segment.unit_price, segment.quantity);
+      subtotal_amount += amounts.taxable_amount;
+      tax_amount += amounts.sgst_amount + amounts.cgst_amount + amounts.igst_amount;
+      lineItems.push({
+        item_id: dbItem.id,
+        amounts,
+        rates: lineGstRates(dbItem),
+        allocations: segment.allocations.map(({ batch_id, quantity }) => ({ batch_id, quantity })),
+      });
+    }
+  }
+
+  subtotal_amount = round2(subtotal_amount);
+  tax_amount = round2(tax_amount);
+
+  if (safeDiscount > subtotal_amount + tax_amount) {
+    throw new ValidationError('Discount cannot exceed the bill subtotal');
+  }
+  // The shop settles in whole rupees and rounds DOWN, so the payable is
+  // floored and the dropped paise become the invoice's Round Off line.
+  // Storing the floored figure (rather than the exact one) keeps printed,
+  // recorded and collected amounts identical — otherwise the cash drawer
+  // never reconciles against the ledger.
+  const grossTotal = round2(subtotal_amount + tax_amount - safeDiscount);
+  const total_amount = Math.floor(grossTotal);
+
+  // --- Reconcile the payment split against the authoritative total ---
+  //
+  // The tender amounts must account for exactly the money owed. Anything
+  // else is either a UI bug or someone under-recording a sale.
+  let cash_amount = 0;
+  let upi_amount = 0;
+  let credit_amount = 0;
+
+  if (payment_method === 'cash') {
+    cash_amount = total_amount;
+  } else if (payment_method === 'upi') {
+    upi_amount = total_amount;
+  } else if (payment_method === 'credit') {
+    credit_amount = total_amount;
+  } else {
+    // Split: honour the client's breakdown, but only if it adds up.
+    const tendered = round2(requestedCash + requestedUpi + requestedCredit);
+    if (Math.abs(tendered - total_amount) > MONEY_EPSILON) {
+      throw new ValidationError(
+        `Payment split (₹${tendered.toFixed(2)}) does not match the bill total (₹${total_amount.toFixed(2)})`
+      );
+    }
+    cash_amount = round2(requestedCash);
+    upi_amount = round2(requestedUpi);
+    // Absorb rounding into credit so the three always sum to the total.
+    credit_amount = round2(total_amount - cash_amount - upi_amount);
+    if (credit_amount < 0) credit_amount = 0;
+  }
+
+  // Credit is an unsecured loan from the shop; it needs a named debtor.
+  if (credit_amount > 0 && !customer_id) {
+    throw new ValidationError('Credit can only be given to registered customers');
+  }
+
+  if (expectedTotal != null && Math.abs(expectedTotal - total_amount) > 0.001) {
+    throw new ConflictError(
+      `Prices or stock changed while this bill was open: it showed ₹${expectedTotal.toFixed(2)} but is now ₹${total_amount.toFixed(2)}. The bill has been refreshed — please check it and save again.`,
+      'PRICE_CHANGED'
+    );
+  }
+
+  let bill_id: number;
+  if (editing) {
+    // Same number, same date and the same cashier who rang it up; who edited
+    // it, and when, is kept alongside.
+    db.prepare(`
+      UPDATE bills SET customer_id = ?, subtotal_amount = ?, total_amount = ?, tax_amount = ?, discount_amount = ?,
+        payment_method = ?, cash_amount = ?, upi_amount = ?, credit_amount = ?,
+        edited_at = CURRENT_TIMESTAMP, edited_by = ?
+      WHERE id = ?
+    `).run(
+      customer_id, subtotal_amount, total_amount, tax_amount, safeDiscount,
+      payment_method, cash_amount, upi_amount, credit_amount, user.name, editing.id
+    );
+    bill_id = editing.id;
+  } else {
     const billResult = db.prepare(`
       INSERT INTO bills (
         bill_number, customer_id, user_id, subtotal_amount, total_amount, tax_amount,
@@ -2420,72 +2965,195 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      bill_number, customer_id, req.user.id, subtotal_amount, total_amount, tax_amount,
+      bill_number, customer_id, user.id, subtotal_amount, total_amount, tax_amount,
       safeDiscount, payment_method, cash_amount, upi_amount, credit_amount
     );
+    bill_id = Number(billResult.lastInsertRowid);
+  }
 
-    const bill_id = Number(billResult.lastInsertRowid);
+  const insertBillItem = db.prepare(`
+    INSERT INTO bill_items (
+      bill_id, item_id, quantity, price, unit_price, sgst_amount, cgst_amount, igst_amount, total_amount,
+      sgst_rate, cgst_rate, igst_rate
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertAllocation = db.prepare(
+    'INSERT INTO bill_item_batches (bill_item_id, batch_id, quantity, unit_cost) VALUES (?, ?, ?, ?)'
+  );
+  // Conditional: the batch must still hold what is being taken from it. The
+  // whole transaction is serialised, so this cannot fail in practice; it is
+  // here so that if it ever did, the bill fails rather than the stock going
+  // negative.
+  const drawDown = db.prepare(`
+    UPDATE stock_batches SET quantity_remaining = ROUND(quantity_remaining - @quantity, 3)
+    WHERE id = @id AND quantity_remaining - @quantity >= -0.0005
+  `);
 
-    const insertBillItem = db.prepare(`
-      INSERT INTO bill_items (
-        bill_id, item_id, quantity, price, unit_price, sgst_amount, cgst_amount, igst_amount, total_amount,
-        sgst_rate, cgst_rate, igst_rate
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const insertAllocation = db.prepare(
-      'INSERT INTO bill_item_batches (bill_item_id, batch_id, quantity, unit_cost) VALUES (?, ?, ?, ?)'
+  for (const line of lineItems) {
+    const { amounts, rates } = line;
+    const billItem = insertBillItem.run(
+      bill_id, line.item_id, amounts.quantity, amounts.price, amounts.unit_price,
+      amounts.sgst_amount, amounts.cgst_amount, amounts.igst_amount, amounts.total_amount,
+      rates.sgst_rate, rates.cgst_rate, rates.igst_rate
     );
-    // Conditional: the batch must still hold what is being taken from it. The
-    // whole transaction is serialised, so this cannot fail in practice; it is
-    // here so that if it ever did, the bill fails rather than the stock going
-    // negative.
-    const drawDown = db.prepare(`
-      UPDATE stock_batches SET quantity_remaining = ROUND(quantity_remaining - @quantity, 3)
-      WHERE id = @id AND quantity_remaining - @quantity >= -0.0005
-    `);
+    const billItemId = Number(billItem.lastInsertRowid);
 
-    for (const line of lineItems) {
-      const { amounts, rates } = line;
-      const billItem = insertBillItem.run(
-        bill_id, line.item_id, amounts.quantity, amounts.price, amounts.unit_price,
-        amounts.sgst_amount, amounts.cgst_amount, amounts.igst_amount, amounts.total_amount,
-        rates.sgst_rate, rates.cgst_rate, rates.igst_rate
-      );
-      const billItemId = Number(billItem.lastInsertRowid);
-
-      for (const allocation of line.allocations) {
-        insertAllocation.run(billItemId, allocation.batch_id, allocation.quantity, batchCost.get(allocation.batch_id) ?? null);
-        if (drawDown.run({ id: allocation.batch_id, quantity: allocation.quantity }).changes === 0) {
-          throw new ValidationError('Stock changed while this bill was being processed. Please retry.');
-        }
+    for (const allocation of line.allocations) {
+      insertAllocation.run(billItemId, allocation.batch_id, allocation.quantity, batchCost.get(allocation.batch_id) ?? null);
+      if (drawDown.run({ id: allocation.batch_id, quantity: allocation.quantity }).changes === 0) {
+        throw new ValidationError('Stock changed while this bill was being processed. Please retry.');
       }
     }
+  }
 
-    for (const itemId of touchedItems) syncItemStock(itemId);
+  for (const itemId of touchedItems) syncItemStock(itemId);
 
-    // Update customer credit balance if credit_amount > 0, and leave a ledger
-    // entry so the customer's statement shows which sale it came from.
+  // The customer's credit, and a ledger entry so their statement shows which
+  // sale it came from.
+  const saleNote = `Credit sale on bill ${bill_number}${editing ? ' (edited)' : ''}`;
+  if (editing && editing.customer_id && editing.customer_id === customer_id && editing.credit_amount > 0 && credit_amount > 0) {
+    // Same customer, still on credit: the sale's own entry changes amount,
+    // keeping its date, so the passbook and the ageing of the debt stay right.
+    adjustBillCredit(bill_id, bill_number, customer_id, credit_amount, saleNote);
+  } else {
+    if (editing && editing.credit_amount > 0) removeBillCredit(bill_id, bill_number, 'edit');
     if (customer_id && credit_amount > 0) {
       recordCreditChange({
         customerId: customer_id,
         delta: credit_amount,
         entryType: 'sale',
         billId: bill_id,
-        note: `Credit sale on bill ${bill_number}`,
-        user: req.user,
+        note: saleNote,
+        user,
       });
     }
+  }
 
-    const print_job_id = printAtCounter
-      ? Number(db.prepare('INSERT INTO print_jobs (bill_id, requested_by, requested_by_name) VALUES (?, ?, ?)')
-          .run(bill_id, req.user.id, req.user.name).lastInsertRowid)
-      : null;
+  const print_job_id = input.printAtCounter
+    ? Number(db.prepare('INSERT INTO print_jobs (bill_id, requested_by, requested_by_name) VALUES (?, ?, ?)')
+        .run(bill_id, user.id, user.name).lastInsertRowid)
+    : null;
 
-    return { bill_id, bill_number, subtotal_amount, tax_amount, total_amount, print_job_id };
-  });
+  return { bill_id, bill_number, subtotal_amount, tax_amount, total_amount, print_job_id };
+};
 
-  const result = transaction();
+/** Moving a ledger entry's amount by `delta` moves every later running balance with it. */
+const shiftLaterBalances = (entry: { id: number; customer_id: number; created_at: string }, delta: number) => {
+  db.prepare(`
+    UPDATE customer_credit_entries
+    SET balance_before = ROUND(balance_before + @delta, 2), balance_after = ROUND(balance_after + @delta, 2)
+    WHERE customer_id = @customer AND (created_at > @at OR (created_at = @at AND id > @id))
+  `).run({ delta, customer: entry.customer_id, at: entry.created_at, id: entry.id });
+};
+
+const alreadyPaidMessage = (billNumber: string, amount: number, owes: number, verb: 'delete' | 'edit') => {
+  const put = `${billNumber} put ₹${round2(amount).toFixed(2)} on credit, but the customer now owes only ₹${round2(owes).toFixed(2)}`;
+  return verb === 'delete'
+    ? `${put} — they have already paid some of it. Record the refund as a balance correction on the customer first, then delete the bill.`
+    : `${put} — they have already paid some of it. Record the refund as a balance correction on the customer first, then edit the bill.`;
+};
+
+/**
+ * Take a bill's credit back off its customer, and its sale entry out of the
+ * ledger. Not through recordCreditChange(): that appends an entry, and a
+ * deleted bill should leave no line on the statement, not a sale and a
+ * reversal. MUST be called inside a db.transaction().
+ */
+const removeBillCredit = (billId: number, billNumber: string, verb: 'delete' | 'edit') => {
+  const saleEntries = db.prepare(`
+    SELECT id, customer_id, amount, created_at FROM customer_credit_entries WHERE bill_id = ? ORDER BY created_at, id
+  `).all(billId) as any[];
+  for (const entry of saleEntries) {
+    const customer = db.prepare('SELECT credit_balance FROM customers WHERE id = ?').get(entry.customer_id) as any;
+    const after = round2((customer?.credit_balance || 0) - entry.amount);
+    if (after < 0) throw new ValidationError(alreadyPaidMessage(billNumber, entry.amount, customer?.credit_balance || 0, verb));
+    db.prepare('UPDATE customers SET credit_balance = ? WHERE id = ?').run(after, entry.customer_id);
+    shiftLaterBalances(entry, -entry.amount);
+    db.prepare('DELETE FROM customer_credit_entries WHERE id = ?').run(entry.id);
+  }
+};
+
+/**
+ * An edited bill, same customer, still on credit: its sale entry takes the
+ * new amount in place. MUST be called inside a db.transaction().
+ */
+const adjustBillCredit = (billId: number, billNumber: string, customerId: number, amount: number, note: string) => {
+  const entry = db.prepare(`
+    SELECT * FROM customer_credit_entries WHERE bill_id = ? AND customer_id = ? AND entry_type = 'sale' ORDER BY id LIMIT 1
+  `).get(billId, customerId) as any;
+  // Every credit bill has its sale entry (the upgrade wrote one for older bills).
+  // Without it the change cannot be matched to the balance, so refuse rather than guess.
+  if (!entry) throw new ValidationError(`The credit on ${billNumber} is not in the customer’s ledger, so its credit cannot be changed here. Correct the customer’s balance instead.`);
+  const delta = round2(amount - entry.amount);
+  if (delta === 0) return;
+  const customer = db.prepare('SELECT credit_balance FROM customers WHERE id = ?').get(customerId) as any;
+  const after = round2((customer?.credit_balance || 0) + delta);
+  if (after < 0) throw new ValidationError(alreadyPaidMessage(billNumber, entry.amount, customer?.credit_balance || 0, 'edit'));
+  db.prepare('UPDATE customers SET credit_balance = ? WHERE id = ?').run(after, customerId);
+  db.prepare(`
+    UPDATE customer_credit_entries SET amount = ?, balance_after = ROUND(balance_after + ?, 2), note = ? WHERE id = ?
+  `).run(amount, delta, note, entry.id);
+  shiftLaterBalances(entry, delta);
+};
+
+/**
+ * Put a bill's stock back into the batches it came from, and remove its lines.
+ * For a delete, and before an edit is rung up again. Each return is recorded
+ * as a stock adjustment with `reason`. MUST be called inside a db.transaction().
+ */
+const returnBillStock = (billId: number, reason: string, user: { id: number; name: string }) => {
+  const lines = db.prepare('SELECT id, item_id, quantity, unit_price, total_amount FROM bill_items WHERE bill_id = ?').all(billId) as any[];
+  const selectAllocations = db.prepare('SELECT batch_id, quantity FROM bill_item_batches WHERE bill_item_id = ?');
+  const putBack = db.prepare('UPDATE stock_batches SET quantity_remaining = ROUND(quantity_remaining + ?, 3) WHERE id = ?');
+  const latestBatch = db.prepare(`
+    SELECT unit_cost, selling_price FROM stock_batches WHERE item_id = ? ORDER BY received_at DESC, id DESC LIMIT 1
+  `);
+  const insertBatch = db.prepare(`
+    INSERT INTO stock_batches (item_id, source, quantity_received, quantity_remaining, unit_cost, selling_price)
+    VALUES (?, 'adjustment', ?, ?, ?, ?)
+  `);
+  const recordAdjustment = db.prepare(`
+    INSERT INTO stock_adjustments (item_id, batch_id, quantity, reason, user_id, user_name)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  const touchedItems = new Set<number>();
+  for (const line of lines) {
+    const allocations = selectAllocations.all(line.id) as Array<{ batch_id: number; quantity: number }>;
+    if (allocations.length > 0) {
+      for (const allocation of allocations) {
+        putBack.run(allocation.quantity, allocation.batch_id);
+        recordAdjustment.run(line.item_id, allocation.batch_id, allocation.quantity, reason, user.id, user.name);
+      }
+    } else if (line.quantity > 0) {
+      const latest = latestBatch.get(line.item_id) as any;
+      const sellingPrice = latest?.selling_price ?? line.unit_price ?? round2(line.total_amount / line.quantity);
+      const batch = insertBatch.run(line.item_id, line.quantity, line.quantity, latest?.unit_cost ?? null, sellingPrice);
+      recordAdjustment.run(line.item_id, Number(batch.lastInsertRowid), line.quantity, reason, user.id, user.name);
+    }
+    touchedItems.add(line.item_id);
+  }
+  for (const itemId of touchedItems) syncItemStock(itemId);
+
+  db.prepare(`
+    DELETE FROM bill_item_batches WHERE bill_item_id IN (SELECT id FROM bill_items WHERE bill_id = ?)
+  `).run(billId);
+  db.prepare('DELETE FROM bill_items WHERE bill_id = ?').run(billId);
+  return { lineCount: lines.length, itemCount: touchedItems.size };
+};
+
+/** "Sugar 1kg × 2, Biscuit × 1": a bill's items, for the activity log. */
+const billItemsSummary = (billId: number) =>
+  (db.prepare(`
+    SELECT i.name, ROUND(SUM(bi.quantity), 3) AS quantity FROM bill_items bi JOIN items i ON i.id = bi.item_id
+    WHERE bi.bill_id = ? GROUP BY bi.item_id ORDER BY MIN(bi.id)
+  `).all(billId) as Array<{ name: string; quantity: number }>)
+    .map((line) => `${line.name} × ${line.quantity}`).join(', ');
+
+app.post('/api/bills', authenticateToken, route((req, res) => {
+  const input = readBillInput(req.body);
+  const result = db.transaction(() => recordBill(input, req.user))();
   analyticsCache = null; // a new sale invalidates the dashboard figures
   writeAuditLog({
     user: req.user,
@@ -2493,6 +3161,40 @@ app.post('/api/bills', authenticateToken, route((req, res) => {
     entityType: 'bill',
     entityId: result.bill_id,
     details: `Created bill ${result.bill_number} for amount ₹${result.total_amount.toFixed(2)}`,
+  });
+  res.json(result);
+}));
+
+/**
+ * Edit a saved bill: its items, quantities, customer, discount and payment.
+ * Admin only, like deleting one. The bill keeps its number and date; in one
+ * transaction its stock goes back to the batches it came from and the new
+ * lines are rung up from them (oldest first, at today's prices), and the
+ * customer's credit moves to match. The activity log keeps what it was.
+ */
+app.put('/api/bills/:id', authenticateToken, requireAdmin, route((req, res) => {
+  const id = rowId(req.params.id);
+  const bill = db.prepare('SELECT id, bill_number, customer_id, credit_amount, total_amount FROM bills WHERE id = ?').get(id) as any;
+  if (!bill) {
+    res.status(404).json({ error: 'Bill not found' });
+    return;
+  }
+  const input = readBillInput(req.body);
+  const before = { items: billItemsSummary(id), total: round2(bill.total_amount) };
+
+  const result = db.transaction(() => {
+    returnBillStock(id, `Bill ${bill.bill_number} edited`, req.user);
+    return recordBill(input, req.user, bill);
+  })();
+  analyticsCache = null;
+
+  writeAuditLog({
+    user: req.user,
+    action: 'update',
+    entityType: 'bill',
+    entityId: id,
+    details: `Edited bill ${bill.bill_number}: ₹${before.total.toFixed(2)} → ₹${result.total_amount.toFixed(2)}; ` +
+      `was ${before.items}; now ${billItemsSummary(id)}`,
   });
   res.json(result);
 }));
@@ -2621,79 +3323,13 @@ app.delete('/api/bills/:id', authenticateToken, requireAdmin, route((req, res) =
     return;
   }
 
-  const reason = `Bill ${bill.bill_number} deleted`;
-
-  const remove = db.transaction(() => {
-    const lines = db.prepare('SELECT id, item_id, quantity, unit_price, total_amount FROM bill_items WHERE bill_id = ?').all(id) as any[];
-    const selectAllocations = db.prepare('SELECT batch_id, quantity FROM bill_item_batches WHERE bill_item_id = ?');
-    const putBack = db.prepare('UPDATE stock_batches SET quantity_remaining = ROUND(quantity_remaining + ?, 3) WHERE id = ?');
-    const latestBatch = db.prepare(`
-      SELECT unit_cost, selling_price FROM stock_batches WHERE item_id = ? ORDER BY received_at DESC, id DESC LIMIT 1
-    `);
-    const insertBatch = db.prepare(`
-      INSERT INTO stock_batches (item_id, source, quantity_received, quantity_remaining, unit_cost, selling_price)
-      VALUES (?, 'adjustment', ?, ?, ?, ?)
-    `);
-    const recordAdjustment = db.prepare(`
-      INSERT INTO stock_adjustments (item_id, batch_id, quantity, reason, user_id, user_name)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-
-    const touchedItems = new Set<number>();
-    for (const line of lines) {
-      const allocations = selectAllocations.all(line.id) as Array<{ batch_id: number; quantity: number }>;
-      if (allocations.length > 0) {
-        for (const allocation of allocations) {
-          putBack.run(allocation.quantity, allocation.batch_id);
-          recordAdjustment.run(line.item_id, allocation.batch_id, allocation.quantity, reason, req.user.id, req.user.name);
-        }
-      } else if (line.quantity > 0) {
-        const latest = latestBatch.get(line.item_id) as any;
-        const sellingPrice = latest?.selling_price ?? line.unit_price ?? round2(line.total_amount / line.quantity);
-        const batch = insertBatch.run(line.item_id, line.quantity, line.quantity, latest?.unit_cost ?? null, sellingPrice);
-        recordAdjustment.run(line.item_id, Number(batch.lastInsertRowid), line.quantity, reason, req.user.id, req.user.name);
-      }
-      touchedItems.add(line.item_id);
-    }
-    for (const itemId of touchedItems) syncItemStock(itemId);
-
-    // Take the bill's credit back off the customer, and its sale entry out of
-    // the ledger. Not through recordCreditChange(): that appends an entry, and
-    // a deleted bill should leave no line on the statement, not a sale and a
-    // reversal.
-    const saleEntries = db.prepare(`
-      SELECT id, customer_id, amount, created_at FROM customer_credit_entries WHERE bill_id = ? ORDER BY created_at, id
-    `).all(id) as any[];
-    for (const entry of saleEntries) {
-      const customer = db.prepare('SELECT credit_balance FROM customers WHERE id = ?').get(entry.customer_id) as any;
-      const after = round2((customer?.credit_balance || 0) - entry.amount);
-      if (after < 0) {
-        throw new ValidationError(
-          `${bill.bill_number} put ₹${round2(entry.amount).toFixed(2)} on credit, but the customer now owes only ` +
-            `₹${round2(customer?.credit_balance || 0).toFixed(2)} — they have already paid some of it. Record the refund ` +
-            'as a balance correction on the customer first, then delete the bill.'
-        );
-      }
-      db.prepare('UPDATE customers SET credit_balance = ? WHERE id = ?').run(after, entry.customer_id);
-      db.prepare(`
-        UPDATE customer_credit_entries
-        SET balance_before = ROUND(balance_before - @amount, 2), balance_after = ROUND(balance_after - @amount, 2)
-        WHERE customer_id = @customer AND (created_at > @at OR (created_at = @at AND id > @id))
-      `).run({ amount: entry.amount, customer: entry.customer_id, at: entry.created_at, id: entry.id });
-      db.prepare('DELETE FROM customer_credit_entries WHERE id = ?').run(entry.id);
-    }
-
-    db.prepare(`
-      DELETE FROM bill_item_batches WHERE bill_item_id IN (SELECT id FROM bill_items WHERE bill_id = ?)
-    `).run(id);
-    db.prepare('DELETE FROM bill_items WHERE bill_id = ?').run(id);
+  const { lineCount, itemCount } = db.transaction(() => {
+    const returned = returnBillStock(id, `Bill ${bill.bill_number} deleted`, req.user);
+    removeBillCredit(id, bill.bill_number, 'delete');
     db.prepare('DELETE FROM print_jobs WHERE bill_id = ?').run(id);
     db.prepare('DELETE FROM bills WHERE id = ?').run(id);
-
-    return { lineCount: lines.length, itemCount: touchedItems.size };
-  });
-
-  const { lineCount, itemCount } = remove();
+    return returned;
+  })();
   analyticsCache = null; // takings, bill counts and low stock all change
 
   const customer = bill.customer_id ? ` for ${customerDisplayName({ name: bill.customer_name, shop_name: bill.customer_shop_name })}` : '';
@@ -2895,7 +3531,8 @@ const PURCHASE_AGE_ORDER_SQL =
  * MUST be called inside a db.transaction().
  */
 const recordSupplierPayment = (params: {
-  supplierId: number;
+  /** null only for a purchase saved without a supplier, paid as it is saved. */
+  supplierId: number | null;
   purchaseId?: number | null;
   amount: number;
   paidOn: string;
@@ -2908,7 +3545,7 @@ const recordSupplierPayment = (params: {
   const outstanding = db.prepare(`
     SELECT p.id, p.purchase_number, ROUND(p.total_amount - ${PURCHASE_PAID_SQL}, 2) AS balance_due
     FROM purchases p
-    WHERE p.supplier_id = ? ${params.purchaseId ? 'AND p.id = ?' : ''}
+    WHERE p.supplier_id IS ? ${params.purchaseId ? 'AND p.id = ?' : ''}
       AND ROUND(p.total_amount - ${PURCHASE_PAID_SQL}, 2) > 0
     ORDER BY ${PURCHASE_AGE_ORDER_SQL}
   `).all(...(params.purchaseId ? [params.supplierId, params.purchaseId] : [params.supplierId])) as Array<{
@@ -2968,7 +3605,9 @@ const readPaidOn = (value: unknown) => {
 };
 
 app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => {
-  const supplier_name = reqString(req.body?.supplier_name, 'Supplier name', 200);
+  // The supplier is optional: stock bought for cash at a market, say, has
+  // none. Such a purchase must be paid in full, as there is no one to owe.
+  const supplier_name = optString(req.body?.supplier_name, 'Supplier name', 200) ?? '';
   const supplier_phone = optString(req.body?.supplier_phone, 'Supplier phone', 20);
   const supplier_address = optString(req.body?.supplier_address, 'Supplier address', 500);
   const supplier_gstin = optString(req.body?.supplier_gstin, 'Supplier GSTIN', 20);
@@ -3013,6 +3652,9 @@ app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => 
           metric: oneOf(item.new_item?.metric, UNIT_VALUES, 'Unit for the new item'),
         }
       : null,
+    // Optional. Saved on the item: a new one, or an existing one that has
+    // none yet. An item that has one keeps it (it is changed in Items).
+    barcode: optBarcode(item?.barcode),
     quantity: num(item?.quantity, 'Quantity', { min: 0, max: 1_000_000 }),
     unit_cost: num(item?.unit_cost, 'Unit cost', { min: 0, max: 10_000_000 }),
     sgst_rate: num(item?.sgst_rate, 'SGST rate', { min: 0, max: 100, fallback: 0 }),
@@ -3062,16 +3704,24 @@ app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => 
   if (amount_paid > total_amount) {
     fail(`Amount paid (₹${amount_paid.toFixed(2)}) is more than the purchase total (₹${total_amount.toFixed(2)})`);
   }
+  if (!supplier_name) {
+    if (supplier_phone || supplier_address || supplier_gstin) {
+      fail('Enter the supplier name to save their phone, GSTIN or address.');
+    }
+    if (amount_paid < total_amount) {
+      fail('A purchase without a supplier must be paid in full. To buy on credit, enter the supplier.');
+    }
+  }
 
   const transaction = db.transaction(() => {
     const purchase_number = nextDocumentNumber('PUR');
 
-    const supplier_id = upsertSupplier({
+    const supplier_id = supplier_name ? upsertSupplier({
       name: supplier_name,
       phone: supplier_phone ?? undefined,
       address: supplier_address ?? undefined,
       gstin: supplier_gstin ?? undefined,
-    });
+    }) : null;
 
     const purchaseResult = db.prepare(`
       INSERT INTO purchases (
@@ -3098,7 +3748,7 @@ app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => 
     const purchase_id = Number(purchaseResult.lastInsertRowid);
 
     const selectItem = db.prepare(`
-      SELECT id, name, hsn_code, metric, gst_applicable, gst_mode, gst_rate, sgst_rate, cgst_rate, igst_rate
+      SELECT id, name, hsn_code, barcode, metric, gst_applicable, gst_mode, gst_rate, sgst_rate, cgst_rate, igst_rate
       FROM items WHERE id = ?
     `);
     const insertPurchaseItem = db.prepare(`
@@ -3115,6 +3765,8 @@ app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => 
       VALUES (?, 'purchase', ?, ?, ?, ?, ?, ?)
     `);
     const rememberMargin = db.prepare('UPDATE items SET default_profit_percent = ? WHERE id = ?');
+    const setBarcode = db.prepare('UPDATE items SET barcode = ? WHERE id = ?');
+    const barcodesAdded: Array<{ id: number; name: string; barcode: string }> = [];
 
     // New items on this purchase. Their sale GST is the GST on the line they
     // were bought on: one place to enter it, so the two cannot disagree. The
@@ -3154,6 +3806,17 @@ app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => 
       if (!existingItem) {
         throw new ValidationError(`Item not found for purchase entry: ${line.item_id}`);
       }
+      if (line.barcode && existingItem.barcode !== line.barcode) {
+        if (existingItem.barcode) {
+          fail(`${existingItem.name} already has the barcode ${existingItem.barcode}. Change it in Items.`);
+        }
+        // Also catches one code on two different items of this purchase: the
+        // earlier line's item has it by now.
+        assertBarcodeFree(line.barcode, existingItem.id);
+        setBarcode.run(line.barcode, existingItem.id);
+        existingItem.barcode = line.barcode;
+        barcodesAdded.push({ id: existingItem.id, name: existingItem.name, barcode: line.barcode });
+      }
 
       // The margin is worked out here, from the cost and the selling price the
       // owner set, and stored with the line for reports. It is not shown on
@@ -3192,7 +3855,7 @@ app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => 
 
     if (amount_paid > 0) {
       recordSupplierPayment({
-        supplierId: supplier_id!,
+        supplierId: supplier_id,
         purchaseId: purchase_id,
         amount: amount_paid,
         paidOn: getISTDateParts().today,
@@ -3203,7 +3866,7 @@ app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => 
       });
     }
 
-    return { purchase_id, purchase_number, created_items: createdItems };
+    return { purchase_id, purchase_number, created_items: createdItems, barcodes_added: barcodesAdded };
   });
 
   const result = transaction();
@@ -3214,7 +3877,7 @@ app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => 
     action: 'create',
     entityType: 'purchase',
     entityId: result.purchase_id,
-    details: `Created purchase ${result.purchase_number} from ${supplier_name} for amount ₹${total_amount.toFixed(2)}` +
+    details: `Created purchase ${result.purchase_number} ${supplier_name ? `from ${supplier_name}` : 'with no supplier'} for amount ₹${total_amount.toFixed(2)}` +
       (balance_due > 0 ? ` (paid ₹${amount_paid.toFixed(2)}, ₹${balance_due.toFixed(2)} on credit)` : ' (paid in full)'),
   });
   if (result.created_items.length) itemNames.kick();
@@ -3225,6 +3888,15 @@ app.post('/api/purchases', authenticateToken, requireAdmin, route((req, res) => 
       entityType: 'item',
       entityId: item.id,
       details: `Created item ${item.name} on purchase ${result.purchase_number}`,
+    });
+  }
+  for (const item of result.barcodes_added) {
+    writeAuditLog({
+      user: req.user,
+      action: 'update',
+      entityType: 'item',
+      entityId: item.id,
+      details: `Set the barcode of ${item.name} to ${item.barcode} on purchase ${result.purchase_number}`,
     });
   }
   res.status(201).json({ ...result, subtotal_amount, tax_amount, total_amount, amount_paid, balance_due });
@@ -3366,7 +4038,7 @@ app.get('/api/paid-purchases', authenticateToken, requireAdmin, route((req, res)
 
   const baseSql = `
     FROM purchases p
-    JOIN suppliers s ON s.id = p.supplier_id
+    LEFT JOIN suppliers s ON s.id = p.supplier_id
     JOIN (
       SELECT a.purchase_id, ROUND(SUM(a.amount), 2) AS amount, MAX(sp.paid_on) AS paid_off_on,
              COUNT(*) AS payment_count, GROUP_CONCAT(DISTINCT sp.method) AS methods
@@ -3378,7 +4050,7 @@ app.get('/api/paid-purchases', authenticateToken, requireAdmin, route((req, res)
   `;
 
   const rows = db.prepare(`
-    SELECT p.id, p.purchase_number, p.supplier_id, s.name AS supplier_name, p.invoice_number, p.invoice_date,
+    SELECT p.id, p.purchase_number, p.supplier_id, COALESCE(s.name, p.supplier_name) AS supplier_name, p.invoice_number, p.invoice_date,
            p.created_at, p.total_amount, paid.amount AS amount_paid, paid.paid_off_on, paid.payment_count, paid.methods
     ${baseSql}
     ORDER BY paid.paid_off_on DESC, p.id DESC
@@ -3410,7 +4082,7 @@ app.get('/api/supplier-payments', authenticateToken, requireAdmin, route((req, r
   const payments = db.prepare(`
     SELECT sp.*, s.name AS supplier_name
     FROM supplier_payments sp
-    JOIN suppliers s ON s.id = sp.supplier_id
+    LEFT JOIN suppliers s ON s.id = sp.supplier_id
     ${whereSql}
     ORDER BY sp.paid_on DESC, sp.id DESC
     LIMIT ? OFFSET ?
@@ -3484,11 +4156,15 @@ app.post('/api/supplier-payments', authenticateToken, requireAdmin, route((req, 
 app.delete('/api/supplier-payments/:id', authenticateToken, requireAdmin, route((req, res) => {
   const id = rowId(req.params.id);
   const payment = db.prepare(`
-    SELECT sp.*, s.name AS supplier_name FROM supplier_payments sp JOIN suppliers s ON s.id = sp.supplier_id WHERE sp.id = ?
+    SELECT sp.*, s.name AS supplier_name FROM supplier_payments sp LEFT JOIN suppliers s ON s.id = sp.supplier_id WHERE sp.id = ?
   `).get(id) as any;
   if (!payment) {
     res.status(404).json({ error: 'Payment not found' });
     return;
+  }
+  // Removing it would leave the purchase owing money to no one.
+  if (payment.supplier_id == null) {
+    fail('This was paid when a purchase without a supplier was saved, so it cannot be removed.');
   }
 
   db.transaction(() => {
@@ -3587,8 +4263,10 @@ app.get('/api/reports/sales-items', authenticateToken, requireAdmin, route(async
       i.name as item_name,
       i.hsn_code,
       i.metric,
+      i.in_my_gst,
       bi.quantity,
       bi.price,
+      bi.unit_price,
       bi.sgst_amount,
       bi.cgst_amount,
       bi.igst_amount,
@@ -3722,7 +4400,7 @@ const STOCK_SALES_WINDOW_DAYS = 30;
 app.get('/api/stock', authenticateToken, route(async (req, res) => {
   const isAdmin = req.user.role === 'admin';
   const rows = await readPool.all(`
-    SELECT i.id, i.name, i.hsn_code, i.metric, i.price, i.stock_quantity,
+    SELECT i.id, i.name, i.hsn_code, i.metric, i.price, i.stock_quantity, i.in_my_gst,
            (SELECT COUNT(*) FROM stock_batches b WHERE b.item_id = i.id AND b.quantity_remaining > 0) AS batch_count,
            (SELECT COUNT(DISTINCT b.selling_price) FROM stock_batches b WHERE b.item_id = i.id AND b.quantity_remaining > 0) AS price_count,
            (SELECT ROUND(COALESCE(SUM(b.quantity_remaining * b.selling_price), 0), 2)
@@ -3800,7 +4478,96 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 // --- Vite Middleware ---
+/**
+ * Start fresh after a trial: erase the practice data, once, from .env.
+ *
+ *   START_FRESH="transactions"           erase bills, purchases, payments,
+ *                                         credit, stock and the activity log;
+ *                                         keep items (stock 0, selling price
+ *                                         kept), customers and suppliers
+ *   START_FRESH="everything"             also erase items, customers and
+ *                                         suppliers
+ *   START_FRESH_CONFIRM="ERASE-2026-11-20"   any new word: the erase runs on
+ *                                         the next start, once for each word
+ *
+ * Staff logins and the shop settings are always kept. A full backup is made
+ * first (in the backups folder, like Backup Now), so it can be undone. Bill
+ * and purchase numbers start again from 0001. Leaving the lines in .env does
+ * nothing more: a word already used is skipped. No button in the app does
+ * this — only someone who can edit .env on the shop computer can.
+ */
+const START_FRESH_SCOPES = ['transactions', 'everything'] as const;
+type StartFreshScope = (typeof START_FRESH_SCOPES)[number];
+
+const startFresh = () => {
+  const scope = (process.env.START_FRESH || '').trim().toLowerCase() as StartFreshScope;
+  const word = (process.env.START_FRESH_CONFIRM || '').trim();
+  if (!scope && !word) return;
+  if (!START_FRESH_SCOPES.includes(scope)) {
+    console.error('[start fresh] NOT done: START_FRESH must be "transactions" or "everything".');
+    return;
+  }
+  if (word.length < 4) {
+    console.error('[start fresh] NOT done: set START_FRESH_CONFIRM to a new word of at least 4 characters.');
+    return;
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS fresh_starts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      confirm_word TEXT UNIQUE NOT NULL,
+      scope TEXT NOT NULL,
+      backup_file TEXT,
+      done_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  if (db.prepare('SELECT 1 FROM fresh_starts WHERE confirm_word = ?').get(word)) {
+    console.log(`[start fresh] already done for "${word}", so nothing was erased. The START_FRESH lines can be removed from .env.`);
+    return;
+  }
+
+  const backup = createLocalBackup('manual');
+  console.log(`[start fresh] backup of everything before erasing: ${backup.filePath}`);
+
+  const count = (table: string) => (db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c;
+  const before = { bills: count('bills'), purchases: count('purchases'), items: count('items'), customers: count('customers'), suppliers: count('suppliers') };
+
+  db.transaction(() => {
+    // Children before parents, for the foreign keys.
+    for (const table of [
+      'bill_item_batches', 'print_jobs', 'bill_items', 'customer_credit_entries', 'bills',
+      'supplier_payment_allocations', 'supplier_payments', 'stock_adjustments', 'stock_batches',
+      'purchase_items', 'purchases', 'audit_logs',
+    ]) {
+      db.prepare(`DELETE FROM ${table}`).run();
+    }
+    db.prepare('UPDATE customers SET credit_balance = 0').run();
+    // Stock 0, to be counted again; the selling price stays as the item's own.
+    db.prepare('UPDATE items SET stock_quantity = 0').run();
+    if (scope === 'everything') {
+      db.prepare('DELETE FROM item_bulk_prices').run();
+      db.prepare('DELETE FROM items').run();
+      db.prepare('DELETE FROM customers').run();
+      db.prepare('DELETE FROM suppliers').run();
+    }
+    // Bill numbers start again at 0001, purchase numbers at 00001 each day.
+    db.prepare("DELETE FROM document_counters WHERE scope = 'INV' OR scope LIKE 'INV:%' OR scope LIKE 'PUR:%'").run();
+    db.prepare('INSERT INTO fresh_starts (confirm_word, scope, backup_file) VALUES (?, ?, ?)').run(word, scope, backup.fileName);
+  })();
+
+  const kept = scope === 'everything'
+    ? 'staff logins and shop settings kept'
+    : `kept ${before.items} item(s) with stock 0, ${before.customers} customer(s) and ${before.suppliers} supplier(s), staff logins and shop settings`;
+  const summary = `Started fresh ("${word}"): erased ${before.bills} bill(s), ${before.purchases} purchase(s)` +
+    `${scope === 'everything' ? `, ${before.items} item(s), ${before.customers} customer(s), ${before.suppliers} supplier(s)` : ''}` +
+    ` and all payments, credit, stock and activity; ${kept}. Backup: ${backup.fileName}`;
+  const owner = db.prepare("SELECT id, name, role FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").get() as any;
+  if (owner) writeAuditLog({ user: owner, action: 'delete', entityType: 'settings', entityId: null, details: summary });
+  console.log(`[start fresh] ${summary}`);
+};
+
 async function startServer() {
+  // Before anything is served: a trial's practice data, erased once if .env asks.
+  startFresh();
   if (!IS_PRODUCTION) {
     // Loaded only here: an installed shop runs in production, where the dev
     // server is never used, and its package does not ship Vite at all.

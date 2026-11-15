@@ -4,8 +4,9 @@ import { api } from '../api';
 import { DateFilterButton, DateFilterPanel } from './DateFilter';
 import type { Purchase } from '../types';
 import { cn, formatDateTimeInIST } from '../lib/utils';
-import { formatDay, formatRupees, paymentMethodLabel } from '../lib/supplierPayments';
+import { formatDay, formatRupees, paymentMethodLabel, supplierLabel } from '../lib/supplierPayments';
 import { t, unitLabel } from '../i18n';
+import { HEADER_NOTE } from '../lib/entryStyles';
 import { ItemName } from './ItemName';
 
 const PAGE_SIZE = 50;
@@ -90,6 +91,8 @@ export const PurchaseHistory = () => {
                 {['Purchase No.', 'Date & Time', 'Supplier', 'Invoice', 'Entered By', 'Amount', 'Payment', ''].map((heading, index) => (
                   <th key={index} className={cn('px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider', index >= 5 && 'text-right')}>
                     {heading && t(heading)}
+                    {heading === 'Amount' && <span className={HEADER_NOTE}>{t('incl. GST')}</span>}
+                    {heading === 'Amount' && <span className={HEADER_NOTE}>{t('incl. GST')}</span>}
                   </th>
                 ))}
               </tr>
@@ -107,7 +110,7 @@ export const PurchaseHistory = () => {
                     <td className="px-6 py-4 font-mono font-bold text-gray-900 whitespace-nowrap">{purchase.purchase_number}</td>
                     <td className="px-6 py-4 text-sm text-gray-500 whitespace-nowrap">{formatDateTimeInIST(purchase.created_at)}</td>
                     <td className="px-6 py-4">
-                      <p className="font-bold text-gray-900">{purchase.supplier_name}</p>
+                      <p className="font-bold text-gray-900">{supplierLabel(purchase.supplier_name)}</p>
                       {purchase.supplier_gstin && <p className="text-xs text-gray-500">{purchase.supplier_gstin}</p>}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
@@ -182,7 +185,7 @@ const PurchaseDetail = ({ purchase, onClose }: { purchase: Purchase; onClose: ()
         <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-5 py-4 sm:px-8 sm:py-6">
           <div className="min-w-0">
             <p className="font-mono text-sm font-bold text-gray-500">{purchase.purchase_number}</p>
-            <h3 className="mt-0.5 truncate text-xl font-bold text-gray-900 sm:text-2xl">{purchase.supplier_name}</h3>
+            <h3 className="mt-0.5 truncate text-xl font-bold text-gray-900 sm:text-2xl">{supplierLabel(purchase.supplier_name)}</h3>
             <p className="mt-1 text-sm text-gray-500">
               {t('{created_at} · entered by {user_name}', { created_at: formatDateTimeInIST(purchase.created_at), user_name: purchase.user_name })}
             </p>
@@ -219,9 +222,9 @@ const PurchaseDetail = ({ purchase, onClose }: { purchase: Purchase; onClose: ()
                 <tr>
                   <th className="px-4 py-3">{t('Item')}</th>
                   <th className="px-4 py-3 text-right">{t('Qty')}</th>
-                  <th className="px-4 py-3 text-right">{t('Cost / unit')}</th>
+                  <th className="px-4 py-3 text-right">{t('Cost / unit')}<span className={HEADER_NOTE}>{t('before GST')}</span></th>
                   <th className="px-4 py-3 text-right">{t('GST')}</th>
-                  <th className="px-4 py-3 text-right">{t('Total')}</th>
+                  <th className="px-4 py-3 text-right">{t('Total')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -245,9 +248,9 @@ const PurchaseDetail = ({ purchase, onClose }: { purchase: Purchase; onClose: ()
                 })}
               </tbody>
               <tfoot className="border-t border-gray-200 bg-gray-50 text-sm">
-                <tr><td colSpan={4} className="px-4 py-2 text-right text-gray-500">{t('Taxable value')}</td><td className="px-4 py-2 text-right tabular-nums">{formatRupees(purchase.subtotal_amount)}</td></tr>
+                <tr><td colSpan={4} className="px-4 py-2 text-right text-gray-500">{t('Taxable value (before GST)')}</td><td className="px-4 py-2 text-right tabular-nums">{formatRupees(purchase.subtotal_amount)}</td></tr>
                 <tr><td colSpan={4} className="px-4 py-2 text-right text-gray-500">{t('GST')}</td><td className="px-4 py-2 text-right tabular-nums">{formatRupees(purchase.tax_amount)}</td></tr>
-                <tr><td colSpan={4} className="px-4 py-2 text-right font-bold text-gray-900">{t('Total')}</td><td className="px-4 py-2 text-right font-black tabular-nums text-gray-900">{formatRupees(purchase.total_amount)}</td></tr>
+                <tr><td colSpan={4} className="px-4 py-2 text-right font-bold text-gray-900">{t('Total (incl. GST)')}</td><td className="px-4 py-2 text-right font-black tabular-nums text-gray-900">{formatRupees(purchase.total_amount)}</td></tr>
               </tfoot>
             </table>
           </div>

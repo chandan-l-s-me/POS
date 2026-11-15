@@ -356,7 +356,7 @@ const ROLE_OPTIONS: Array<{ id: User['role']; label: string; description: string
   {
     id: 'admin',
     get label() { return t('Admin'); },
-    get description() { return t('Everything a cashier can do, plus settings, staff accounts, purchases, reports and backups.'); },
+    get description() { return t('Everything a cashier can do, plus settings, staff accounts, purchases, reports and backups. Signs in only on this shop computer, not from the website or phone app.'); },
   },
 ];
 
@@ -512,6 +512,11 @@ const StaffAccounts = ({ onOpenMyAccount }: { onOpenMyAccount: () => void }) => 
                       )}>
                         {account.role === 'admin' ? t('Admin') : t('Cashier')}
                       </span>
+                      {account.env_managed ? (
+                        <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-700" title={t('This admin can sign in from the internet. Its username and password are set in the .env file.')}>
+                          {t('Internet access')}
+                        </span>
+                      ) : null}
                       <span className={cn('inline-flex items-center gap-1.5 text-xs font-semibold', inactive ? 'text-gray-400' : 'text-emerald-600')}>
                         <span className={cn('h-1.5 w-1.5 rounded-full', inactive ? 'bg-gray-300' : 'bg-emerald-500')} />
                         {inactive ? t('Deactivated') : t('Active')}
@@ -519,7 +524,9 @@ const StaffAccounts = ({ onOpenMyAccount }: { onOpenMyAccount: () => void }) => 
                     </div>
 
                     <div className="flex gap-2 sm:ml-auto">
-                      {isMe ? (
+                      {account.env_managed ? (
+                        <p className="text-xs text-gray-500">{t('Set in the .env file: change or remove it there.')}</p>
+                      ) : isMe ? (
                         <button type="button" onClick={onOpenMyAccount} className="text-sm font-semibold text-orange-600 hover:underline">
                           {t('Change in My account')}
                         </button>
@@ -712,7 +719,7 @@ const LanguageSettings = () => {
   const load = async () => {
     const result = await api.getKannadaItemNames();
     setNames(result.names ?? {});
-    setStatus({ enabled: result.enabled, pending: result.pending, total: Object.keys(result.names ?? {}).length, last_error: result.last_error });
+    setStatus({ enabled: result.enabled, pending: result.pending + (result.customers_pending ?? 0), total: Object.keys(result.names ?? {}).length, last_error: result.last_error });
   };
 
   useEffect(() => {
@@ -745,8 +752,8 @@ const LanguageSettings = () => {
       </Panel>
 
       <Panel
-        title={t('Item names in Kannada')}
-        description={t('New items are translated with Google Translate a few seconds after they are saved. A wrong name can be corrected under Items → Edit.')}
+        title={t('Item and customer names in Kannada')}
+        description={t('New items are translated with Google Translate a few seconds after they are saved, and customers’ names are written in Kannada letters. A wrong item name can be corrected under Items → Edit.')}
         action={status?.enabled && (
           <button type="button" onClick={translateNow} disabled={busy || status.pending === 0} className={secondaryButton}>
             <Languages size={16} /> {busy ? t('Translating…') : t('Translate now')}

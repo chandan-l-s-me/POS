@@ -2,12 +2,13 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Layers, X } from 'lucide-react';
 import { api } from '../api';
-import type { Item, StockBatch } from '../types';
+import type { BulkPrice, Item, StockBatch } from '../types';
 import { cn, formatDateTimeInIST } from '../lib/utils';
 import { round3 } from '../lib/billMath';
 import { t, unitLabel } from '../i18n';
 import { ItemName } from './ItemName';
 import { tRich } from '../i18n/rich';
+import { BulkPriceEditor } from './BulkPrices';
 
 /**
  * One item's stock, batch by batch, in the order it will be sold.
@@ -42,6 +43,7 @@ const sourceLabel = (batch: StockBatch) => {
 export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, onChanged }) => {
   const [batches, setBatches] = useState<StockBatch[]>([]);
   const [summary, setSummary] = useState<{ stock_quantity: number; price: number } | null>(null);
+  const [bulkPrices, setBulkPrices] = useState<BulkPrice[]>([]);
   const [showSoldOut, setShowSoldOut] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -65,6 +67,7 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
       const res = await api.getItemBatches(item.id, { all: true });
       setBatches(res?.data ?? []);
       setSummary({ stock_quantity: res?.item?.stock_quantity ?? 0, price: res?.item?.price ?? 0 });
+      setBulkPrices(res?.item?.bulk_prices ?? []);
       setError('');
     } catch (err: any) {
       setError(err?.message || t('Could not load stock.'));
@@ -183,7 +186,7 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
                 <th className="pb-3 text-right font-bold">{t('Bought')}</th>
                 <th className="pb-3 text-right font-bold">{t('Left')}</th>
                 {isAdmin && <th className="pb-3 text-right font-bold">{t('Cost')}<span className="block font-normal normal-case">{t('before GST')}</span></th>}
-                <th className="pb-3 text-right font-bold">{t('Selling price')}</th>
+                <th className="pb-3 text-right font-bold">{t('Selling price')}<span className="block font-normal normal-case">{t('incl. GST')}</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -244,6 +247,17 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
               )}
             </tbody>
           </table>
+
+          {!loading && (
+            <BulkPriceEditor
+              itemId={item.id}
+              metric={item.metric}
+              rules={bulkPrices}
+              normalPrice={summary?.price ?? null}
+              isAdmin={isAdmin}
+              onSaved={(rules) => { setBulkPrices(rules); onChanged(); }}
+            />
+          )}
         </div>
 
         {isAdmin && (
@@ -291,12 +305,12 @@ export const StockPanel: React.FC<StockPanelProps> = ({ item, isAdmin, onClose, 
                     />
                   </label>
                   <label className="space-y-1">
-                    <span className="block text-xs font-semibold text-gray-600">{t('Selling price')}</span>
+                    <span className="block text-xs font-semibold text-gray-600">{t('Selling price incl. GST')}</span>
                     <input
                       type="number" step="0.01" min="0.01"
                       value={sellingPrice}
                       onChange={(e) => setSellingPrice(e.target.value)}
-                      placeholder={latest ? String(latest.selling_price) : t('Required')}
+                      placeholder={latest ? String(latest.selling_price) : summary && summary.price > 0 ? String(summary.price) : t('Required')}
                       className="w-32 rounded-2xl border border-gray-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-orange-500"
                     />
                   </label>

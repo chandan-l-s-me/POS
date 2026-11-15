@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- App icon foreground: the website's logo (public/favicon.svg), a white "V"
+     on the indigo background (@color/ic_launcher_background). The V is the
+     favicon's own path, scaled and centred in the adaptive icon's 66dp safe
+     zone (21..87 of 108), at the size it has in the favicon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="1.125"
+        android:scaleY="1.125"
+        android:translateX="18"
+        android:translateY="18">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M18,18h7l7,20 7,-20h7L35.5,46h-7z" />
+    </group>
+</vector>

@@ -1,4 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
+import { inScreenLanguage } from '../i18n';
 
 /**
  * The Android app's "send a PDF to WhatsApp" (BillSharePlugin.java). Absent in
@@ -12,4 +13,4 @@ const BillShare = registerPlugin<BillSharePlugin>('BillShare');
 
 export const hasNativePdfShare = () => Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('BillShare');
 
-export const sharePdfNative = (options: Parameters<BillSharePlugin['sharePdf']>[0]) => BillShare.sharePdf(options);
+export const sharePdfNative = (options: Parameters<BillSharePlugin['sharePdf']>[0]) => inScreenLanguage(BillShare.sharePdf(options));

@@ -1,4 +1,4 @@
-# Vyapara Billing
+# Vasavi Billing
 
 Point-of-sale billing, inventory and GST records for a single retail shop.
 React + Vite on the front, Express + SQLite on the back, served as one process.
@@ -36,12 +36,12 @@ change it under Settings. If you would rather set it yourself, put it in
 ### Giving it to a shop
 
 A shop never runs a command. `npm run package` builds
-`release/VyaparaBilling-<version>.zip`, which contains everything the shop's
+`release/VasaviBilling-<version>.zip`, which contains everything the shop's
 computer needs: the built app, the server bundled into one file, the Node.js
 runtime, and WinSW (MIT) to run it as a Windows service. Nothing has to be
 installed first.
 
-On the shop's computer, unzip it and double-click **Install Vyapara.bat**
+On the shop's computer, unzip it and double-click **Install Vasavi.bat**
 (one administrator prompt). It asks for the shop name, an admin password and an
 optional second backup folder, then:
 
@@ -50,18 +50,18 @@ optional second backup folder, then:
   only by administrators and the service;
 - writes a fresh `.env` with a new `JWT_SECRET` and nothing of yours (no Google
   or Cloudflare settings);
-- registers the **Vyapara Billing** service: starts with Windows, restarts
+- registers the **Vasavi Billing** service: starts with Windows, restarts
   itself if it stops, runs without anyone signed in;
 - creates the admin, removes the one-time password from `.env`, sets the shop
   name, and adds a desktop / Start-menu icon that opens the app.
 
-A new version: build a new package and run **Update Vyapara.bat** from the new
+A new version: build a new package and run **Update Vasavi.bat** from the new
 folder. It backs up the database (checked copy), swaps the program, and puts
 the previous version back if the new one does not start. **Uninstall
-Vyapara.bat** (or Settings > Apps) removes the program and keeps the data;
+Vasavi.bat** (or Settings > Apps) removes the program and keeps the data;
 installing again picks the data up. Every question can also be given as a
 parameter for unattended installs — see the top of `installer/scripts/install.ps1`.
-Records of each run go to `%TEMP%\VyaparaBilling-install.log` (and `-update`,
+Records of each run go to `%TEMP%\VasaviBilling-install.log` (and `-update`,
 `-uninstall`). `installer/README.txt` is the shop-facing version of this.
 
 The Cloudflare tunnel is not part of the installer: it needs the shop's own
@@ -70,9 +70,9 @@ Cloudflare account and token (see *Remote access* below).
 **Give the shop the zip, not this repository.** `installer/` in the source tree
 holds only the scripts; the app, Node and the service wrapper exist only in
 the built package, which is not committed (`release/` is git-ignored). Run from
-a clone, `Install Vyapara.bat` stops and says where to get the package. Publish
+a clone, `Install Vasavi.bat` stops and says where to get the package. Publish
 each build as a GitHub Release: Releases > *Draft a new release*, tag it with
-the version (e.g. `v1.0.0`), and attach `release/VyaparaBilling-<version>.zip`.
+the version (e.g. `v1.0.0`), and attach `release/VasaviBilling-<version>.zip`.
 
 ---
 
@@ -102,8 +102,15 @@ Items are still typed and searched in English. Their Kannada names come from
 Google Translate, filled in by the server in the background a few seconds
 after an item is added or renamed. An admin can correct one under Items →
 Edit, and Settings → Language shows how many are still waiting. Without
-internet the names stay English until the next attempt. Only item names are
-sent to Google.
+internet the names stay English until the next attempt.
+
+Customers' names (the bakery's and the person's) are written in Kannada
+letters the same way, with Google Input Tools: spelt, not translated, so
+"Sri Ganesh Bakery" shows as ಶ್ರೀ ಗಣೇಶ್ ಬೇಕರಿ, with the English underneath.
+A renamed customer gets a new spelling. Search finds them by either.
+
+Only names are sent to Google: never phone numbers, addresses, GSTINs,
+prices or bills.
 
 - **`GOOGLE_TRANSLATE_API_KEY`** — optional. Uses Google's paid Cloud
   Translation API. Without it, the free endpoint behind Google's web widgets
@@ -111,6 +118,17 @@ sent to Google.
   down or change it.
 - **`TRANSLATE_ITEM_NAMES=off`** — never contact Google; items then show in
   English on Kannada screens unless a Kannada name is typed in.
+- **`TRANSLATE_CUSTOMER_NAMES=off`** — keep customers' names on this
+  computer; they then show in English, while items are still translated.
+
+Every search box forgives a slip of the finger. What was typed is looked for
+inside the names first, as before; only when nothing contains it are the
+closest names shown instead, allowing one wrong, missing, extra or swapped
+letter per word (two in a word of seven letters or more): "suger" finds Sugar,
+"ganseh" finds Sri Ganesh Bakery. The Items and Customers pages say when they
+are showing the closest names. Codes (HSN, barcode, phone, GSTIN) match only
+as typed. The rules are in `src/lib/fuzzy.ts`, shared by the screens and the
+server.
 
 ### Exposing it to other tills
 
@@ -145,9 +163,36 @@ is trusted only from loopback). Sign-in is throttled per visitor (5 failures →
 counter is never blocked by remote failures, so nobody can lock the shop out of
 its own till.
 
+**Admin accounts work only at the counter.** From the tunnel (the website or
+the phone app) only cashier accounts can sign in. An admin signing in from
+there gets "Admin accounts can be used only on the shop computer", and an admin
+session taken off the counter stops working at once. Anything that is not
+loopback counts as outside, so a till on the shop network (`HOST=0.0.0.0`) is
+also cashier-only. Set `ALLOW_REMOTE_ADMIN=on` in `.env` and restart to lift
+this, for example for remote support.
+
+**One admin from the internet.** The owner can have an admin account that
+works from anywhere, set in `.env`:
+
+```
+REMOTE_ADMIN_USERNAME="owner"
+REMOTE_ADMIN_PASSWORD="<at least 12 characters, long and random>"
+```
+
+It is created when the app starts. Every other admin stays at the counter. The
+account is managed only in `.env`: change the password there and restart to
+replace it (its open sessions are signed out); remove both lines and restart to
+turn it off. The app cannot reset, deactivate or delete it; Settings → Staff
+shows it with an *Internet access* tag. It is refused, and the console says
+why, if the password is under 12 characters or a published demo password, or
+if the username already belongs to another account. Its sign-ins are throttled
+like any other and logged with the visitor's address. On an installed shop the
+file is `C:\Program Files\VyaparaBilling\app\.env`; restart the *Vasavi Billing*
+service after editing it.
+
 ### Phone app (Android): Quick Bill
 
-Cashiers can bill on a phone with the **Vyapara Billing** Android app. The app
+Cashiers can bill on a phone with the **Vasavi Billing** Android app. The app
 is a native shell (Capacitor, in `android/`) that opens the Quick Bill screen
 (`/m`) from the shop server, so it always runs the same billing code as the
 counter — a change to the screen needs only the server updated, not a new APK.
@@ -168,6 +213,15 @@ Bluetooth printing.
 - **Install on a phone:** copy the APK over (WhatsApp/USB), open it, allow
   "Install unknown apps" for that one source, install. First open shows the
   Cloudflare Access email check, then the sign-in page.
+- **Stays signed in.** A cashier who signs in on the app stays signed in when
+  it is closed and reopened (a 90-day session, `STAY_SIGNED_IN_EXPIRY`). Each
+  time the app opens or comes back to the front it asks `POST /api/auth/session`:
+  a deactivated cashier, or one whose password was reset, is signed out there
+  and then; otherwise the 90 days start again. Admins, and cashiers in a
+  browser, keep the 12-hour sign-in.
+- **Icon:** the website's logo, the white V on indigo
+  (`drawable/ic_launcher_logo.xml` for the adaptive icon and splash screen; the
+  `mipmap-*/ic_launcher*.png` files for Android 7).
 
 ---
 
@@ -231,10 +285,35 @@ Schema changes apply automatically on start, in place, and are idempotent —
 starting a newer build against an existing database is the whole upgrade. Take
 a backup first anyway.
 
+### Starting fresh after a trial
+
+A shop can practise with made-up bills for its first days, then erase them and
+start for real. There is deliberately no button for this: it is done from
+`.env`, by someone at the shop computer. Add:
+
+```
+START_FRESH="transactions"
+START_FRESH_CONFIRM="ERASE-TRIAL-1"
+```
+
+and restart the app (on an installed shop, the *Vasavi Billing* service). On
+that start, before anything is served, it saves a full backup to the backups
+folder and then erases bills, purchases, supplier payments, customer credit,
+stock and the activity log. Items (stock 0, selling price kept), customers and
+suppliers stay, so the catalogue entered during the trial is not lost; count
+the real stock and add it under Items → *Stock & prices* → Add stock, or enter
+the purchases. `START_FRESH="everything"` also erases items, customers and
+suppliers. Staff logins and shop settings are always kept, and bill numbers
+start again at 0001. The console and the activity log say what was erased.
+
+It runs once per `START_FRESH_CONFIRM` word (kept in the `fresh_starts` table),
+so the lines can stay in `.env` afterwards without erasing anything again. To
+undo it, stop the app and put the backup it made back at `DB_PATH`.
+
 ### Google Drive backup
 
 Once connected, every backup — the daily automatic one and **Backup Now** — is
-also gzipped and uploaded to a **Vyapara Billing Backups** folder in the
+also gzipped and uploaded to a **Vasavi Billing Backups** folder in the
 owner's Google Drive, and automatic ones older than `BACKUP_KEEP_DAYS` are
 removed there too. The app asks only for Google's `drive.file` permission: it
 can see and change the files it uploads, nothing else in the Drive. The
@@ -244,15 +323,15 @@ database, not in it, so backups never contain it.
 **One-time setup** (about 10 minutes, with the Google account that should hold
 the backups):
 
-1. <https://console.cloud.google.com> → create a project (e.g. "Vyapara Billing").
+1. <https://console.cloud.google.com> → create a project (e.g. "Vasavi Billing").
 2. *APIs & Services → Library* → enable **Google Drive API**.
 3. *APIs & Services → OAuth consent screen* (Google Auth Platform): user type
-   **External**, app name "Vyapara Billing", your email as support and
+   **External**, app name "Vasavi Billing", your email as support and
    developer contact. Under *Data access* add the scopes `…/auth/drive.file`,
    `openid` and `email`. Then under *Audience* press **Publish app** ("In
    production") — while it stays in "Testing", Google expires the connection
    every 7 days. These scopes need no Google review; on connecting you may see
-   "Google hasn't verified this app": choose *Advanced → Go to Vyapara Billing*.
+   "Google hasn't verified this app": choose *Advanced → Go to Vasavi Billing*.
 4. *Clients* (Credentials) → **Create client** → type **Web application** →
    authorised redirect URI: `https://pos.chandanls.in/api/backups/google/callback`
    (your `PUBLIC_URL` + `/api/backups/google/callback`).
@@ -345,8 +424,10 @@ credit billed, not the balance as it stood on the day.
 
 ## Stock, purchases and FIFO pricing
 
-**Items exist only because they were bought.** There is no "add item" anywhere
-else, and no API to create one on its own. On the Purchases screen, typing a
+**Items exist only because they were bought**, or because they were already
+on the shelves when the shop started using the app (see *Importing the shop's
+items* below). There is no other "add item", and no API to create one on its
+own. On the Purchases screen, typing a
 name that isn't in the catalogue makes that row a *new item*: its HSN code and
 unit (a dropdown) are filled in right in the row. The item is created only
 when the purchase is saved, in the same transaction, and it takes its sale GST
@@ -387,6 +468,20 @@ stock sells at), so this holds even for requests that bypass the screen.
 `bill_items.price_overridden` is kept for lines written before this, and is 0
 on every new line.
 
+**Bulk prices** give a lower price for buying in quantity, e.g. 10 or more at
+₹110 each and 25 or more at ₹105 each. An admin sets them per item under Items →
+*Stock & prices* → *Bulk prices*, as a quantity and a price including GST. When
+the bill has at least that quantity of the item (counted over the whole bill,
+even across two lines), every unit is charged the bulk price. With several bulk
+prices, the largest quantity reached wins. A batch that already sells for less
+keeps its own price, so buying more never costs more per unit. The till shows
+"Bulk price · 10+" on the line, or "10+ at ₹110.00" while the quantity is still
+short of it. The server works out the same price (`applyBulkPrice` in
+`src/lib/billMath.ts`, shared with the till), so `expected_total` still matches.
+A bigger quantity cannot have a higher bulk price, and each quantity must be
+more than 1. Cashiers can see bulk prices but not change them. Every change is
+in the activity log. Rules are in `item_bulk_prices`.
+
 **Stock only moves three ways:** purchases add a batch; sales draw down batches
 oldest first (`bill_item_batches` records which); and **stock adjustments** add
 or remove stock with a reason (Items → *Stock & prices*). The item form can no
@@ -407,6 +502,93 @@ Each item's current stock is assigned to its newest purchases first, which is
 what FIFO would have left on the shelf. Anything the purchases don't explain
 becomes one 'opening' batch with an unknown cost. Every rebuilt batch keeps the
 item's current selling price, so nothing changes at the counter.
+
+**Purchases without a supplier.** The supplier is optional (for stock bought
+for cash at a market, say). Such a purchase must be paid in full: with no
+supplier there is no one to owe, so *On credit* and *Part paid* are off. Its
+payment is a `supplier_payments` row with no supplier, so it counts in the
+payment-method totals and appears in Payments Done. It cannot be removed, as
+that would leave the purchase owing no one. It shows as "No supplier".
+
+### Importing the shop's items
+
+A shop that is already trading starts with Items → **Import items**
+(`/items/import`, admin only). Its steps are:
+
+1. Download the Excel template. Its headings are in English and Kannada,
+   Unit and GST % are dropdowns, the HSN column is text (so 0402 keeps its
+   zero), and a second sheet explains each column.
+2. Fill it in, then upload it. A CSV file, or cells copied from Excel or
+   Google Sheets and pasted onto the page, works too. Rows can also be
+   typed into the table.
+3. Every row is checked as it changes. A problem is shown under its row and
+   blocks the import. Selling below cost is only a warning.
+
+Saving is all or nothing. Each row becomes an item plus one `'opening'`
+batch holding its quantity, cost (optional) and selling price. It is not a
+purchase, so purchase reports and GST input tax are untouched. A quantity of 0
+lists the item with its price and no stock.
+
+- **Headings:** any order works, and common alternatives (Qty, MRP, UOM,
+  HSN/SAC…) are recognised. Without headings, the template's column order is
+  assumed.
+- **Values that are read:** units like Pcs, Kgs and pkt; prices like ₹1,250;
+  GST typed as `18%` or stored as `0.18`. HSN codes Excel cut short (402) are
+  restored (0402).
+- **Names:** a name already in the app, or entered twice, is refused.
+- **Kannada names:** a Kannada name in the sheet is kept; otherwise it is
+  translated automatically.
+
+The draft stays in the browser until it is imported or cleared. The rules are
+in `src/lib/itemImport.ts`, shared by the page and `POST /api/items/import`.
+The .xlsx reading and writing (no library) is in `src/lib/spreadsheet.ts`.
+The template's last column is an optional barcode, kept as text so Excel does
+not show it as 8.90123E+12.
+
+### Barcodes
+
+An item can have one barcode: the code on the pack (EAN-13 on most Indian
+goods) or one the shop prints. It is optional; loose goods have none. Any USB
+or Bluetooth scanner that types like a keyboard works, with no setup.
+
+- **Purchases:** each row has a Barcode column.
+  - Scanning a code an item already has fills the row with that item. If the
+    item is already on another row, the cursor goes to that row's quantity.
+  - A code no item has stays on the row and is saved with it. That works for
+    a new item, or an existing item that has no barcode yet.
+  - An item that already has a barcode shows it read-only. It is changed in
+    Items.
+- **Items:**
+  - Each card shows its barcode. **Add barcode** / **Change** sets it there:
+    click, scan, done.
+  - The Edit form has a Barcode field.
+  - Filter buttons show All items, With barcode, Without barcode, Low stock
+    and Out of stock, each with its count. To label a shop's existing stock,
+    choose **Without barcode** and work down the list.
+- **Billing:** a scan adds the item to the bill.
+  - A code no item has shows a message, instead of doing nothing.
+  - The search box and Quick Bill's search also find items by barcode.
+
+Scans are read by `src/hooks/useBarcodeScanner.ts`, which Billing, Purchases
+and Items mount, so a scan on any other page does nothing.
+
+- A scanner types far faster than a person, so a burst of keys ending in
+  Enter is read as a code.
+- If the cursor was in some other box, like a quantity, the code is taken
+  back out of that box. Only bursts of 8 or more characters count there, so
+  fast typing is never mistaken for a scan.
+
+Codes are stored without spaces and in upper case, so a scanner with Caps
+Lock on still matches. A code belongs to one item; a unique index enforces
+it. The rules are in `src/lib/barcode.ts`, shared by the screens and the
+server.
+
+On upgrade:
+
+- The old `items.barcode` column, which held HSN codes, is cleaned once.
+  `PRAGMA user_version` 0 → 1 marks it done.
+- Anything that was really an HSN code moves to `hsn_code` and is removed
+  from `barcode`.
 
 ---
 
@@ -436,9 +618,51 @@ Deriving the taxable value by subtraction, rather than multiplying a rounded
 unit base by the quantity, is what makes `taxable + tax === total` exactly true
 for every line, so the invoice reconciles. The bill's payable is then
 `floor(subtotal + tax - discount)` — the shop settles in whole rupees and the
-dropped paise become the invoice's **Round Off** line. The Billing screen has
-no discount field, so the till always sends none; the API still accepts a
-`discount_amount`, and older bills that had one print it as before.
+dropped paise become the invoice's **Round Off** line.
+
+**Every till keeps up live.** Billing and Quick Bill search, price and show
+stock from a copy of the catalogue on the device. Every 4 seconds while the
+app is on screen, the device asks the server what changed since it last asked
+(`GET /api/items/changes?since=N`) and merges just those items. An item
+bought, repriced, edited or sold on another computer shows within seconds,
+without a reload, and open bills holding it are re-priced. Each check is a few
+bytes when nothing changed, which suits phones on mobile data. Database
+triggers number every change to an item (`items.change_seq`, see
+`trackItemChanges` in `db/index.ts`), so no write path can be missed.
+
+**Editing a bill** (History → bill → *Edit Bill*, admins only) opens it in its
+own Billing tab with its items, customer, discount and payment. Saving that tab
+(`PUT /api/bills/:id`) replaces the bill in one transaction: it keeps its number
+and date, its stock goes back to the batches it came from and the new lines are
+rung up from them (oldest first, at today's prices), and the customer's credit
+moves to match. The credit sale's own ledger entry changes amount, keeping its
+date, so the passbook and ageing stay right; it is refused if the customer has
+already paid more than the new amount. While editing, the till counts the
+bill's own units as in stock (`?excluding_bill=`). The bill shows who edited it
+and when, and the activity log keeps what it was before.
+
+**Invoice numbers** run 0001, 0002, 0003 … one count that never resets
+(10000 follows 9999). Bills from before this change keep their old
+`INV-DDMMYYYY-NNNNN` numbers. A deleted bill leaves its number unused.
+Purchases keep `PUR-DDMMYYYY-NNNNN`.
+
+**Discount.** Billing and Quick Bill take one rupee amount off the whole bill
+(`discount_amount`). It comes off after GST: GST is charged on the full
+prices, and the customer pays `floor(subtotal + GST − discount)`. The till
+shows how it gets there, under the grand total: Subtotal + GST, − Discount, and
+the Round off. A discount bigger than the bill is flagged and refused. Every
+printed and shared bill shows Discount and Round Off lines, and each item's own
+GST rate and amount (a GST column on the A5 invoice, a line under each item on
+the receipts).
+
+**Include in my GST.** Each item has an *Include in my GST* tick (Items → edit,
+and a Yes/No column in the import, empty meaning Yes). It is a **report view
+only**: the sales report can show all items, only the ticked ones, or only the
+rest, and its totals and CSV follow the choice. In those views the totals are
+of the item lines, before any bill discount or round off, since those belong
+to the whole bill. Bills charge and print GST on every item either way, and
+nothing else in the app looks at the tick. It is `items.in_my_gst` (1 unless
+unticked), and the report reads the item's current setting.
 
 The server recomputes all of this from the batches. It ignores any amounts,
 taxes or totals in the request, and refuses a per-line `unit_price` that is not
@@ -468,6 +692,10 @@ real user gesture.
 | `billing.test.ts` | Bill arithmetic, GST, rounding, stock, payment reconciliation, concurrency |
 | `fifo.test.ts` | Batches, oldest-first selling, split lines, prices not changeable at billing, adjustments, stock always adding up |
 | `cart-parity.test.ts` | The till's displayed total vs. the recorded total |
+| `my-gst-discount.test.ts` | Include in my GST (form, import, report), discount and round off, GST on every receipt line |
+| `live-catalogue.test.ts` | Every till sees items bought, repriced, sold or edited elsewhere |
+| `bill-edit.test.ts` | Editing a saved bill: items, payment, stock, credit, refusals |
+| `bulk-prices.test.ts` | Bulk prices: the rules, setting them, who may, billing at them, till/server agreement |
 | `catalogue.test.ts` | Items, customers, suppliers, settings |
 | `customer-identity.test.ts` | Bakery-first naming: the shared rule, validation, sorting and search |
 | `passbook.test.ts` | Every bill once, no double-counted credit, running balance, mid-history periods |

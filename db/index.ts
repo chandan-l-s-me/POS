@@ -255,6 +255,19 @@ export function initDb() {
       FOREIGN KEY (purchase_item_id) REFERENCES purchase_items(id)
     );
 
+    -- Bulk prices: buy min_quantity or more of an item on one bill and every
+    -- unit sells at price (GST-inclusive) — unless its batch already sells for
+    -- less. Set by an admin under Items → Stock & prices.
+    CREATE TABLE IF NOT EXISTS item_bulk_prices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      min_quantity REAL NOT NULL CHECK(min_quantity > 0),
+      price REAL NOT NULL CHECK(price > 0),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (item_id, min_quantity),
+      FOREIGN KEY (item_id) REFERENCES items(id)
+    );
+
     -- Which batches each bill line was taken from, and at what cost. A line
     -- can span batches when the oldest runs out part-way through a sale.
     CREATE TABLE IF NOT EXISTS bill_item_batches (
@@ -295,7 +308,8 @@ export function initDb() {
     -- nothing else stores it, so the two cannot drift apart.
     CREATE TABLE IF NOT EXISTS supplier_payments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      supplier_id INTEGER NOT NULL,
+      -- NULL for a purchase saved without a supplier, which is paid on the spot.
+      supplier_id INTEGER,
       amount REAL NOT NULL CHECK(amount > 0),
       -- The day the money was handed over (YYYY-MM-DD, IST). Often entered
       -- later, so it is asked for rather than taken from created_at.
@@ -357,6 +371,10 @@ export function initDb() {
   ensureColumn('purchase_items', 'igst_rate', 'REAL NOT NULL DEFAULT 0');
   ensureColumn('purchase_items', 'igst_amount', 'REAL NOT NULL DEFAULT 0');
   ensureColumn('items', 'hsn_code', 'TEXT');
+  // A customer's names in Kannada letters (see server/translate.ts). NULL: not
+  // written yet; '': tried, nothing usable, so the English is shown.
+  ensureColumn('customers', 'name_kn', 'TEXT');
+  ensureColumn('customers', 'shop_name_kn', 'TEXT');
   ensureColumn('purchase_items', 'hsn_code', 'TEXT');
   ensureColumn('items', 'gst_mode', "TEXT DEFAULT 'split'");
   ensureColumn('items', 'gst_rate', 'REAL DEFAULT 0');
@@ -368,8 +386,10 @@ export function initDb() {
   // paise the grand total drops when it is floored. Storing it once makes the
   // printed invoice, the on-screen summary and the GST return agree.
   ensureColumn('bills', 'subtotal_amount', 'REAL NOT NULL DEFAULT 0');
-  db.exec(`UPDATE items SET hsn_code = barcode WHERE (hsn_code IS NULL OR hsn_code = '') AND barcode IS NOT NULL AND barcode != ''`);
-  db.exec(`UPDATE purchase_items SET hsn_code = barcode WHERE (hsn_code IS NULL OR hsn_code = '') AND barcode IS NOT NULL AND barcode != ''`);
+  // When a saved bill was last edited, and by whom (History → Edit Bill).
+  ensureColumn('bills', 'edited_at', 'DATETIME');
+  ensureColumn('bills', 'edited_by', 'TEXT');
+  reclaimBarcodeColumn();
   db.exec(`UPDATE items SET gst_mode = 'split' WHERE gst_mode IS NULL OR gst_mode = ''`);
   db.exec(`UPDATE items SET gst_rate = COALESCE(sgst_rate, 0) + COALESCE(cgst_rate, 0) WHERE COALESCE(gst_rate, 0) = 0`);
   db.exec(`UPDATE items SET igst_rate = 0 WHERE igst_rate IS NULL`);
@@ -378,6 +398,10 @@ export function initDb() {
   ensureColumn('users', 'token_version', 'INTEGER NOT NULL DEFAULT 0');
   // Lets an admin disable a cashier without deleting their historical bills.
   ensureColumn('users', 'is_active', 'INTEGER NOT NULL DEFAULT 1');
+  // 1 for the admin account set in .env (REMOTE_ADMIN_USERNAME and
+  // REMOTE_ADMIN_PASSWORD): the one admin that can sign in from the internet.
+  // Its password lives in .env, so the app cannot change it.
+  ensureColumn('users', 'env_managed', 'INTEGER NOT NULL DEFAULT 0');
   // The profit margin used on this item's last purchase, offered again on the
   // next one so the purchase screen does not start from a blank every time.
   ensureColumn('items', 'default_profit_percent', 'REAL');
@@ -406,8 +430,13 @@ export function initDb() {
   // The item's name in Kannada, for staff who read it more easily. NULL until
   // server/translate.ts fills it in; '' if there was nothing usable.
   ensureColumn('items', 'name_kn', 'TEXT');
+  // "Include in my GST": which items the sales report's "In my GST" view
+  // shows. A report view only — bills charge and print GST on every item as
+  // usual, and every other report includes them all. Ticked unless unticked.
+  ensureColumn('items', 'in_my_gst', 'INTEGER NOT NULL DEFAULT 1');
   linkPurchasesToSuppliers();
   if (!hadSupplierPayments) markExistingPurchasesPaid();
+  allowPaymentsWithoutSupplier();
 
   // Backfill the subtotal for bills written before the column existed, from
   // their own line items — the same derivation the receipt used to do at
@@ -616,7 +645,7 @@ export function initDb() {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     1,
-    'Vyapar POS System',
+    'Vasavi POS',
     '123 Bakery Lane, Food City',
     '+91 98765 43210',
     '27AAAAA0000A1Z5',
@@ -628,6 +657,54 @@ export function initDb() {
   // Last, so items created above by SEED_DEMO_DATA get batches too.
   seedStockBatches();
   backfillPurchaseLinePricing();
+  trackItemChanges();
+}
+
+/**
+ * Every change to an item — new, renamed, repriced, stock moved, bulk prices,
+ * deleted — gets the next number from one counter (`document_counters` row
+ * 'ITEMS'), kept in `items.change_seq`. The tills ask "what changed after N?"
+ * every few seconds (GET /api/items/changes) and get back only those items, so
+ * a phone sees an item bought, repriced or sold on another computer within
+ * seconds, without downloading the whole list again.
+ *
+ * Triggers, not calls in server.ts, so no write path can be missed: stock and
+ * price are written by syncItemStock() after every sale, purchase and
+ * adjustment, names by the item form and the translator, and so on.
+ */
+function trackItemChanges() {
+  ensureColumn('items', 'change_seq', 'INTEGER NOT NULL DEFAULT 0');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS item_deletions (
+      item_id INTEGER NOT NULL,
+      seq INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_items_change_seq ON items(change_seq);
+    CREATE INDEX IF NOT EXISTS idx_item_deletions_seq ON item_deletions(seq);
+    INSERT OR IGNORE INTO document_counters (scope, last_value) VALUES ('ITEMS', 0);
+
+    CREATE TRIGGER IF NOT EXISTS items_changed_on_insert AFTER INSERT ON items BEGIN
+      UPDATE document_counters SET last_value = last_value + 1 WHERE scope = 'ITEMS';
+      UPDATE items SET change_seq = (SELECT last_value FROM document_counters WHERE scope = 'ITEMS') WHERE id = NEW.id;
+    END;
+    -- Not when the change is to change_seq itself: that is this trigger's own write.
+    CREATE TRIGGER IF NOT EXISTS items_changed_on_update AFTER UPDATE ON items
+    WHEN NEW.change_seq IS OLD.change_seq BEGIN
+      UPDATE document_counters SET last_value = last_value + 1 WHERE scope = 'ITEMS';
+      UPDATE items SET change_seq = (SELECT last_value FROM document_counters WHERE scope = 'ITEMS') WHERE id = NEW.id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS items_changed_on_delete AFTER DELETE ON items BEGIN
+      UPDATE document_counters SET last_value = last_value + 1 WHERE scope = 'ITEMS';
+      INSERT INTO item_deletions (item_id, seq) VALUES (OLD.id, (SELECT last_value FROM document_counters WHERE scope = 'ITEMS'));
+    END;
+    -- Bulk prices travel with the item, so a change to them is a change to it.
+    CREATE TRIGGER IF NOT EXISTS items_changed_on_bulk_insert AFTER INSERT ON item_bulk_prices BEGIN
+      UPDATE items SET change_seq = change_seq WHERE id = NEW.item_id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS items_changed_on_bulk_delete AFTER DELETE ON item_bulk_prices BEGIN
+      UPDATE items SET change_seq = change_seq WHERE id = OLD.item_id;
+    END;
+  `);
 }
 
 /**
@@ -635,6 +712,39 @@ export function initDb() {
  * the purchase names one that is not on file. Only touches unlinked purchases,
  * so it is a no-op once done.
  */
+/**
+ * `items.barcode` once held what was really the HSN code, and every start
+ * copied it into `hsn_code` where that was empty. The column now holds the
+ * product barcode a scanner reads, so the copy happens once, on the first
+ * start of this version (`user_version` 0 → 1), and a value that was only an
+ * HSN code is cleared rather than left to look like a barcode. Run on every
+ * start, the copy would turn a real barcode into an item's HSN code.
+ */
+function reclaimBarcodeColumn() {
+  ensureColumn('items', 'barcode', 'TEXT');
+  const version = db.pragma('user_version', { simple: true }) as number;
+  if (version < 1) {
+    db.transaction(() => {
+      db.exec(`UPDATE items SET hsn_code = barcode WHERE (hsn_code IS NULL OR hsn_code = '') AND barcode IS NOT NULL AND barcode != ''`);
+      db.exec(`UPDATE purchase_items SET hsn_code = barcode WHERE (hsn_code IS NULL OR hsn_code = '') AND barcode IS NOT NULL AND barcode != ''`);
+      db.exec(`UPDATE items SET barcode = NULL WHERE barcode = '' OR barcode = hsn_code`);
+      // Stored as the screens compare them: no spaces, upper case. A value
+      // that would then clash with another item's is left as it was.
+      db.exec(`UPDATE OR IGNORE items SET barcode = upper(replace(barcode, ' ', '')) WHERE barcode IS NOT NULL`);
+    })();
+    db.pragma('user_version = 1');
+  }
+  // One item per barcode. Tables created with `barcode TEXT UNIQUE` already
+  // have this; a column added later does not.
+  const uniqueOnBarcode = (db.prepare('PRAGMA index_list(items)').all() as Array<{ name: string; unique: number }>)
+    .filter((index) => index.unique)
+    .some((index) => {
+      const columns = db.prepare(`PRAGMA index_info("${index.name.replace(/"/g, '""')}")`).all() as Array<{ name: string }>;
+      return columns.length === 1 && columns[0].name === 'barcode';
+    });
+  if (!uniqueOnBarcode) db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_items_barcode ON items(barcode)');
+}
+
 function linkPurchasesToSuppliers() {
   const names = db.prepare(`
     SELECT DISTINCT TRIM(supplier_name) AS name FROM purchases WHERE supplier_id IS NULL
@@ -653,6 +763,52 @@ function linkPurchasesToSuppliers() {
       link.run(supplierId, name);
     }
   })();
+}
+
+/**
+ * A purchase can now be saved without a supplier (bought for cash at a market,
+ * say), and its payment is recorded with no supplier. supplier_payments was
+ * created with supplier_id NOT NULL, which SQLite cannot relax in place, so
+ * the table is copied into one without it. Runs once; a no-op afterwards.
+ */
+function allowPaymentsWithoutSupplier() {
+  const columns = db.prepare('PRAGMA table_info(supplier_payments)').all() as Array<{ name: string; notnull: number }>;
+  if (!columns.find((column) => column.name === 'supplier_id')?.notnull) return;
+
+  // Foreign keys must be off while the table is swapped (allocations point at
+  // it), and that cannot be changed inside a transaction.
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE supplier_payments_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          supplier_id INTEGER,
+          amount REAL NOT NULL CHECK(amount > 0),
+          paid_on TEXT NOT NULL,
+          method TEXT CHECK(method IN ('cash', 'upi', 'bank', 'cheque')),
+          reference TEXT,
+          note TEXT,
+          user_id INTEGER,
+          user_name TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        INSERT INTO supplier_payments_new (id, supplier_id, amount, paid_on, method, reference, note, user_id, user_name, created_at)
+          SELECT id, supplier_id, amount, paid_on, method, reference, note, user_id, user_name, created_at FROM supplier_payments;
+        DROP TABLE supplier_payments;
+        ALTER TABLE supplier_payments_new RENAME TO supplier_payments;
+      `);
+      const broken = [
+        ...(db.pragma('foreign_key_check(supplier_payments)') as unknown[]),
+        ...(db.pragma('foreign_key_check(supplier_payment_allocations)') as unknown[]),
+      ];
+      if (broken.length > 0) throw new Error(`supplier_payments migration left ${broken.length} broken reference(s)`);
+    })();
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
 }
 
 /**

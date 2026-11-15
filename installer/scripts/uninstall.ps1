@@ -1,4 +1,4 @@
-# Remove Vyapara Billing from this computer. Run through "Uninstall Vyapara.bat"
+# Remove Vasavi Billing from this computer. Run through "Uninstall Vasavi.bat"
 # (in the installed folder, or from Settings > Apps).
 #
 # The shop's data - bills, customers, stock, backups - is KEPT unless
@@ -17,16 +17,16 @@ if (-not $InstallDir) {
   # Run from the installed copy: its own folder is the install folder.
   $InstallDir = if (Test-Path (Join-Path $PackageRoot 'install.json')) { $PackageRoot } else { $DefaultInstallDir }
 }
-if (-not $LogFile) { $LogFile = Join-Path $env:TEMP 'VyaparaBilling-uninstall.log' }
+if (-not $LogFile) { $LogFile = Join-Path $env:TEMP 'VasaviBilling-uninstall.log' }
 Start-Transcript -Path $LogFile -Force | Out-Null
 
 $exitCode = 0
 try {
   $info = Get-InstallInfo $InstallDir
-  if (-not $info) { throw "Vyapara Billing is not installed in $InstallDir." }
+  if (-not $info) { throw "Vasavi Billing is not installed in $InstallDir." }
   $serviceName = $info.serviceName
   Write-Host ''
-  Write-Host "  Remove Vyapara Billing $($info.version)" -ForegroundColor White
+  Write-Host "  Remove Vasavi Billing $($info.version)" -ForegroundColor White
   Write-Host '  ------------------------------------------'
   Write-Note "Program: $InstallDir"
   Write-Note "Shop data: $($info.dataDir) - $(if ($RemoveData) { 'WILL BE DELETED' } else { 'kept' })"
@@ -51,7 +51,8 @@ try {
   Write-Ok 'Service removed'
 
   Write-Step 'Removing icons and the program entry'
-  foreach ($path in (Get-ShortcutPaths $serviceName)) { if (Test-Path $path) { Remove-Item $path -Force } }
+  # Icons under the app's old name too, for an install never updated past it.
+  foreach ($path in @(Get-ShortcutPaths $serviceName) + @(Get-ShortcutPaths $serviceName $OldAppName)) { if (Test-Path $path) { Remove-Item $path -Force } }
   $key = Join-Path $UninstallKeyRoot $serviceName
   if (Test-Path $key) { Remove-Item $key -Recurse -Force }
   Write-Ok 'Removed'
@@ -76,7 +77,7 @@ try {
   }
 
   Write-Host ''
-  Write-Host '  Vyapara Billing has been removed.' -ForegroundColor Green
+  Write-Host '  Vasavi Billing has been removed.' -ForegroundColor Green
   if (-not $RemoveData) { Write-Host "  The shop's data is still in $($info.dataDir). Installing again will use it." }
 } catch {
   $exitCode = 1

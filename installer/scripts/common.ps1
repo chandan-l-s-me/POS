@@ -23,11 +23,11 @@ function Assert-Package([switch]$Quiet) {
     Write-Host ''
   }
   Write-Host '  What to do:'
-  Write-Host '    1. Get the file VyaparaBilling-<version>.zip (from the GitHub "Releases"'
+  Write-Host '    1. Get the file VasaviBilling-<version>.zip (from the GitHub "Releases"'
   Write-Host '       page, or from whoever supplies the app). A developer can build it'
   Write-Host '       with: npm run package'
   Write-Host '    2. Right-click the zip > Extract All.'
-  Write-Host '    3. Open the extracted folder and double-click "Install Vyapara.bat".'
+  Write-Host '    3. Open the extracted folder and double-click "Install Vasavi.bat".'
   if (-not $Quiet) { Write-Host ''; Read-Host 'Press Enter to close this window' | Out-Null }
   exit 1
 }
@@ -211,11 +211,61 @@ function Find-Browser {
   return $null
 }
 
-function Get-ShortcutPaths([string]$ServiceName) {
-  $label = if ($ServiceName -eq 'VyaparaBilling') { 'Vyapara Billing' } else { "Vyapara Billing ($ServiceName)" }
+# The name people see. Versions up to 1.2 were called Vyapara Billing; the
+# service, the folders and the data keep their old internal names (VyaparaBilling,
+# C:\VyaparaData) so an update still finds them.
+$Script:AppName = 'Vasavi Billing'
+$Script:OldAppName = 'Vyapara Billing'
+
+function Get-AppLabel([string]$ServiceName, [string]$Name = $AppName) {
+  if ($ServiceName -eq 'VyaparaBilling') { return $Name }
+  return "$Name ($ServiceName)"
+}
+
+function Get-ShortcutPaths([string]$ServiceName, [string]$Name = $AppName) {
+  $label = Get-AppLabel $ServiceName $Name
   $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
   $menu = [Environment]::GetFolderPath('CommonPrograms')
   return @((Join-Path $desktop "$label.lnk"), (Join-Path $menu "$label.lnk"))
+}
+
+# An install made by a version called Vyapara Billing: give its icons, its
+# Apps list entry, its service and its .bat files the new name. Only names
+# change; nothing here touches the program or the shop data.
+function Update-AppName([string]$InstallDir, [string]$ServiceName, [int]$Port) {
+  $label = Get-AppLabel $ServiceName
+  $old = @(Get-ShortcutPaths $ServiceName $OldAppName)
+  $new = @(Get-ShortcutPaths $ServiceName)
+  $shell = New-Object -ComObject WScript.Shell
+  for ($i = 0; $i -lt $old.Count; $i++) {
+    if (-not (Test-Path $old[$i])) { continue }
+    if (Test-Path $new[$i]) { Remove-Item $old[$i] -Force; continue }
+    Move-Item $old[$i] $new[$i] -Force
+    $link = $shell.CreateShortcut($new[$i])
+    $link.Description = "Open $AppName"
+    $link.Save()
+  }
+
+  $key = Join-Path $UninstallKeyRoot $ServiceName
+  if (Test-Path $key) {
+    Set-ItemProperty $key DisplayName $label
+    Set-ItemProperty $key Publisher $AppName
+    Set-ItemProperty $key UninstallString "`"$(Join-Path $InstallDir 'Uninstall Vasavi.bat')`""
+  }
+
+  foreach ($file in @('Update Vyapara.bat', 'Uninstall Vyapara.bat')) {
+    $path = Join-Path $InstallDir $file
+    if (Test-Path $path) { Remove-Item $path -Force }
+  }
+
+  Invoke-Native 'sc.exe' @('config', $ServiceName, 'DisplayName=', $label) | Out-Null
+  Invoke-Native 'sc.exe' @('description', $ServiceName, "$AppName point of sale. Open http://127.0.0.1:$Port in a browser.") | Out-Null
+  # The service's settings file, so a reinstall from it keeps the new name.
+  $xmlPath = [IO.Path]::ChangeExtension((Get-ServiceExe $InstallDir $ServiceName), '.xml')
+  if (Test-Path $xmlPath) {
+    $xml = Get-Content $xmlPath -Raw
+    if ($xml.Contains($OldAppName)) { Set-Content -Path $xmlPath -Value $xml.Replace($OldAppName, $AppName) -Encoding UTF8 -NoNewline }
+  }
 }
 
 function Pause-IfInteractive([switch]$Quiet) {

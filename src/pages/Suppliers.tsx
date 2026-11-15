@@ -15,6 +15,7 @@ import { Link } from 'react-router-dom';
 import { Supplier } from '../types';
 import { formatRupees } from '../lib/supplierPayments';
 import { t } from '../i18n';
+import { searchList } from '../lib/fuzzy';
 
 export const Suppliers = () => {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -43,12 +44,11 @@ export const Suppliers = () => {
   }, []);
 
   const filteredSuppliers = useMemo(() => {
-    const query = search.toLowerCase();
-    return suppliers.filter((supplier) =>
-      supplier.name.toLowerCase().includes(query) ||
-      (supplier.phone || '').includes(search) ||
-      (supplier.gstin || '').toLowerCase().includes(query)
-    );
+    // Forgives a slip in a name when nothing contains the text.
+    return searchList(suppliers, search, {
+      names: (supplier) => [supplier.name],
+      codes: (supplier) => [supplier.phone, supplier.gstin],
+    });
   }, [suppliers, search]);
 
   const handleOpenModal = (supplier?: Supplier) => {

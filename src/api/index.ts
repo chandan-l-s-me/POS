@@ -1,5 +1,5 @@
 import { useAuthStore } from '../store/useAuthStore';
-import type { StaffAccount, User } from '../types';
+import type { Customer, Item, StaffAccount, User } from '../types';
 import { t } from '../i18n';
 import { translateServerMessage } from '../i18n/serverMessages';
 
@@ -13,7 +13,13 @@ export interface ListQuery {
   search?: string;
   withImages?: 1;
   order?: 'asc' | 'desc';
+  /** Items only: narrow the list (see ItemFilter). */
+  filter?: ItemFilter;
+  /** Items only: also return how many items each filter shows. */
+  counts?: 1;
 }
+
+export type ItemFilter = 'barcode' | 'no_barcode' | 'low_stock' | 'out_of_stock';
 
 const buildQuery = (params?: ListQuery) => {
   if (!params) return '';
@@ -75,6 +81,8 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
 
 export const api = {
   login: (credentials: any) => fetchWithAuth('/auth/login', { method: 'POST', body: JSON.stringify(credentials) }),
+  /** Is this sign-in still good? A stay-signed-in one comes back with a fresh token. */
+  checkSession: (): Promise<{ user: User; token?: string }> => fetchWithAuth('/auth/session', { method: 'POST' }),
 
   getSettings: () => fetchWithAuth('/settings'),
   updateSettings: (settings: any) => fetchWithAuth('/settings', { method: 'PUT', body: JSON.stringify(settings) }),
@@ -100,19 +108,38 @@ export const api = {
   // the Items admin screen asks for the full row (including image_url).
   getItems: (params?: ListQuery) => fetchWithAuth(`/items${buildQuery(params)}`).then(unwrap),
   getItemsPage: (params?: ListQuery) => fetchWithAuth(`/items${buildQuery(params)}`),
-  // No addItem: items are created only as new lines of a saved purchase.
+  // No addItem: items are created only as new lines of a saved purchase, or
+  // all at once by the opening-stock import below.
+  /** Items with their opening stock. Saves nothing if any row has a problem; those come back by row. */
+  importItems: (body: { rows: Array<Record<string, string>>; check_only?: boolean }): Promise<{
+    ok: boolean; saved: boolean; count: number;
+    problems: Array<{ row: number; field: any; message: string; vars?: Record<string, string | number>; warning?: boolean }>;
+  }> => fetchWithAuth('/items/import', { method: 'POST', body: JSON.stringify(body) }),
   /** Kannada names by English name, and how many items are still waiting for one. */
-  getKannadaItemNames: (): Promise<{ names: Record<string, string>; enabled: boolean; pending: number; last_error: string | null; last_run_at: string | null }> =>
+  getKannadaItemNames: (): Promise<{ names: Record<string, string>; enabled: boolean; pending: number; customers_pending?: number; last_error: string | null; last_run_at: string | null }> =>
     fetchWithAuth('/items/kannada-names'),
   translateItemNames: () => fetchWithAuth('/items/translate', { method: 'POST' }),
+  /** The item with this barcode; rejects (status 404) when there is none. */
+  getItemByBarcode: (code: string): Promise<Item> => fetchWithAuth(`/items/barcode/${encodeURIComponent(code)}`),
+  /** Set an item's barcode, or remove it with ''. */
+  setItemBarcode: (id: number, barcode: string): Promise<{ success: boolean; barcode: string | null }> =>
+    fetchWithAuth(`/items/${id}/barcode`, { method: 'PUT', body: JSON.stringify({ barcode }) }),
   updateItem: (id: number, item: any) => fetchWithAuth(`/items/${id}`, { method: 'PUT', body: JSON.stringify(item) }),
   deleteItem: (id: number) => fetchWithAuth(`/items/${id}`, { method: 'DELETE' }),
   /** An item's stock batch by batch, oldest (next to sell) first. */
-  getItemBatches: (id: number, options: { all?: boolean } = {}) =>
-    fetchWithAuth(`/items/${id}/batches${options.all ? '?all=1' : ''}`),
+  getItemBatches: (id: number, options: { all?: boolean; excludingBill?: number | null } = {}) => {
+    const query = [options.all ? 'all=1' : '', options.excludingBill ? `excluding_bill=${options.excludingBill}` : ''].filter(Boolean).join('&');
+    return fetchWithAuth(`/items/${id}/batches${query ? `?${query}` : ''}`);
+  },
   /** Add (quantity > 0) or remove (quantity < 0) stock, with a reason. */
   adjustStock: (id: number, payload: { quantity: number; reason: string; unit_cost?: number; selling_price?: number }) =>
     fetchWithAuth(`/items/${id}/stock-adjustments`, { method: 'POST', body: JSON.stringify(payload) }),
+  /** Items changed after change number `since` (see GET /api/items/changes). */
+  getItemChanges: (since: number): Promise<{ seq: number; reset?: boolean; items: Item[]; deleted: number[] }> =>
+    fetchWithAuth(`/items/changes?since=${since}`),
+  /** Replace an item's bulk prices ([] removes them). Admin. */
+  setBulkPrices: (id: number, bulkPrices: Array<{ min_quantity: number; price: number }>): Promise<{ bulk_prices: Array<{ min_quantity: number; price: number }> }> =>
+    fetchWithAuth(`/items/${id}/bulk-prices`, { method: 'PUT', body: JSON.stringify({ bulk_prices: bulkPrices }) }),
   repriceBatch: (batchId: number, sellingPrice: number) =>
     fetchWithAuth(`/stock-batches/${batchId}`, { method: 'PUT', body: JSON.stringify({ selling_price: sellingPrice }) }),
 
@@ -141,6 +168,9 @@ export const api = {
   getBillsPage: (params?: ListQuery) => fetchWithAuth(`/bills${buildQuery(params)}`),
   getBill: (id: number) => fetchWithAuth(`/bills/${id}`),
   createBill: (bill: any) => fetchWithAuth('/bills', { method: 'POST', body: JSON.stringify(bill) }),
+  /** Replace a saved bill's items, customer, discount and payment, keeping its number and date. Admin. */
+  updateBill: (id: number, bill: any) => fetchWithAuth(`/bills/${id}`, { method: 'PUT', body: JSON.stringify(bill) }),
+  getCustomer: (id: number): Promise<Customer> => fetchWithAuth(`/customers/${id}`),
 
   // Quick Bill (phone app)
   /** What this customer usually buys, and the shop's best sellers. */

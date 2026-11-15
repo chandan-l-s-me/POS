@@ -1,8 +1,8 @@
-# Install Vyapara Billing on this computer. Run through "Install Vyapara.bat".
+# Install Vasavi Billing on this computer. Run through "Install Vasavi.bat".
 #
 # Afterwards the server is a Windows service: it starts with the computer,
 # restarts itself if it stops, and needs no one signed in. The shop opens the
-# "Vyapara Billing" icon on the desktop. ASCII only (see common.ps1).
+# "Vasavi Billing" icon on the desktop. ASCII only (see common.ps1).
 #
 # Every question can be answered with a parameter instead, for unattended
 # installs and testing:
@@ -28,7 +28,7 @@ param(
 Assert-Package -Quiet:$Quiet
 if (Invoke-Elevated $PSCommandPath $PSBoundParameters) { return }
 if (-not $InstallDir) { $InstallDir = $DefaultInstallDir }
-if (-not $LogFile) { $LogFile = Join-Path $env:TEMP 'VyaparaBilling-install.log' }
+if (-not $LogFile) { $LogFile = Join-Path $env:TEMP 'VasaviBilling-install.log' }
 Start-Transcript -Path $LogFile -Force | Out-Null
 
 $exitCode = 0
@@ -36,7 +36,7 @@ $createdService = $false
 try {
   $version = Get-PackageVersion $PackageRoot
   Write-Host ''
-  Write-Host "  Vyapara Billing $version - installation" -ForegroundColor White
+  Write-Host "  Vasavi Billing $version - installation" -ForegroundColor White
   Write-Host '  ------------------------------------------'
 
   # --- Checks -----------------------------------------------------------------
@@ -46,7 +46,7 @@ try {
     if (-not (Test-Path (Join-Path $PackageRoot $required))) { throw "The package is incomplete: $required is missing. Unzip the whole folder and run it again." }
   }
   if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-    throw "Vyapara Billing is already installed here. To install a new version, use 'Update Vyapara.bat'."
+    throw "Vasavi Billing is already installed here. To install a new version, use 'Update Vasavi.bat'."
   }
   if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
     throw "Port $Port is already in use by another program. Run the installer with -Port and a free number (for example 3010)."
@@ -99,7 +99,7 @@ try {
   foreach ($folder in @('app', 'node', 'service', 'scripts')) {
     Copy-Folder (Join-Path $PackageRoot $folder) (Join-Path $InstallDir $folder)
   }
-  foreach ($file in @('Update Vyapara.bat', 'Uninstall Vyapara.bat', 'README.txt')) {
+  foreach ($file in @('Update Vasavi.bat', 'Uninstall Vasavi.bat', 'README.txt')) {
     Copy-Item (Join-Path $PackageRoot $file) (Join-Path $InstallDir $file) -Force
   }
   Write-Ok 'Program files copied'
@@ -115,7 +115,7 @@ try {
   Write-Step 'Writing the settings'
   $envFile = Join-Path $InstallDir 'app\.env'
   $lines = @(
-    '# Written by the Vyapara Billing installer. Keep this file private.',
+    '# Written by the Vasavi Billing installer. Keep this file private.',
     "JWT_SECRET=`"$(New-Secret 32)`"",
     'NODE_ENV="production"',
     'HOST="127.0.0.1"',
@@ -141,12 +141,12 @@ try {
   if ($ServiceName -ne 'VyaparaBilling') {
     Move-Item (Join-Path $InstallDir 'service\VyaparaBilling.exe') $serviceExe -Force
   }
-  $displayName = if ($ServiceName -eq 'VyaparaBilling') { 'Vyapara Billing' } else { "Vyapara Billing ($ServiceName)" }
+  $displayName = if ($ServiceName -eq 'VyaparaBilling') { 'Vasavi Billing' } else { "Vasavi Billing ($ServiceName)" }
   $xml = @"
 <service>
   <id>$ServiceName</id>
   <name>$displayName</name>
-  <description>Vyapara Billing point of sale. Open http://127.0.0.1:$Port in a browser.</description>
+  <description>Vasavi Billing point of sale. Open http://127.0.0.1:$Port in a browser.</description>
   <executable>$(Join-Path $InstallDir 'node\node.exe')</executable>
   <arguments>server.mjs</arguments>
   <workingdirectory>$(Join-Path $InstallDir 'app')</workingdirectory>
@@ -205,15 +205,15 @@ try {
   New-Item -Path $key -Force | Out-Null
   Set-ItemProperty $key DisplayName $displayName
   Set-ItemProperty $key DisplayVersion $version
-  Set-ItemProperty $key Publisher 'Vyapara Billing'
+  Set-ItemProperty $key Publisher 'Vasavi Billing'
   Set-ItemProperty $key InstallLocation $InstallDir
-  Set-ItemProperty $key UninstallString "`"$(Join-Path $InstallDir 'Uninstall Vyapara.bat')`""
+  Set-ItemProperty $key UninstallString "`"$(Join-Path $InstallDir 'Uninstall Vasavi.bat')`""
   Set-ItemProperty $key NoModify 1 -Type DWord
   Set-ItemProperty $key NoRepair 1 -Type DWord
 
   $url = "http://127.0.0.1:$Port"
   if (-not $NoShortcuts) {
-    Write-Step 'Adding the Vyapara Billing icon'
+    Write-Step 'Adding the Vasavi Billing icon'
     $browser = Find-Browser
     $shell = New-Object -ComObject WScript.Shell
     foreach ($path in (Get-ShortcutPaths $ServiceName)) {
@@ -226,14 +226,14 @@ try {
       } else {
         $link.TargetPath = $url
       }
-      $link.Description = 'Open Vyapara Billing'
+      $link.Description = 'Open Vasavi Billing'
       $link.Save()
     }
     Write-Ok 'Desktop and Start menu icons added'
   }
 
   Write-Host ''
-  Write-Host '  Vyapara Billing is installed.' -ForegroundColor Green
+  Write-Host '  Vasavi Billing is installed.' -ForegroundColor Green
   Write-Host "  Open it from the desktop icon, or at $url"
   if (-not $existingData) { Write-Host "  Sign in as 'admin' with the password you chose." }
   Write-Host "  Shop data and backups: $DataDir"

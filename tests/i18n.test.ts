@@ -61,6 +61,24 @@ describe('Kannada dictionary', () => {
     assert.deepEqual(SERVER_MESSAGES.filter((message) => !(message in kn)), []);
   });
 
+  it('has an entry for every message the Android app can show', () => {
+    // BluetoothPrinter and BillShare answer in English; the screen shows them through t().
+    const javaDir = path.join(ROOT, 'android/app/src/main/java/in/chandanls/pos');
+    const messages = fs.readdirSync(javaDir)
+      .flatMap((name) => [...fs.readFileSync(path.join(javaDir, name), 'utf8').matchAll(/call\.reject\("((?:[^"\\]|\\.)*)"\)/g)])
+      .map((match) => match[1].replace(/\\"/g, '"'));
+    assert.ok(messages.length >= 10, 'found the plugins’ messages');
+    assert.deepEqual([...new Set(messages)].filter((message) => !(message in kn)), []);
+  });
+
+  it('has an entry for every problem the item import can find', () => {
+    // src/lib/itemImport.ts reports problems in English; the import screen shows them through t().
+    const source = fs.readFileSync(path.join(ROOT, 'src/lib/itemImport.ts'), 'utf8');
+    const messages = [...source.matchAll(/(?:problem\('\w+', |message: )'([^']+)'/g)].map((match) => match[1]);
+    assert.ok(messages.length >= 15, 'found the problems');
+    assert.deepEqual(messages.filter((message) => !(message in kn)), []);
+  });
+
   it('keeps each entry’s {placeholders}', () => {
     const wrong = Object.entries(kn).filter(([en, k]) => placeholders(en).join() !== placeholders(k).join());
     assert.deepEqual(wrong, []);
@@ -123,7 +141,12 @@ describe('server messages', () => {
     // A template's fixed parts must all appear in server.ts, so a reworded
     // server message is noticed here rather than showing in English.
     // Long messages are split over lines ('…' +\n '…'): join them back up.
-    const server = fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf8').replace(/[`'"]\s*\+\s*[`'"]/g, '');
+    // Barcode rules are shared with the screens, so the server sends their
+    // wording from src/lib/barcode.ts.
+    const server = ['server.ts', 'src/lib/barcode.ts']
+      .map((file) => fs.readFileSync(path.join(ROOT, file), 'utf8'))
+      .join('\n')
+      .replace(/[`'"]\s*\+\s*[`'"]/g, '');
     // A bare 401/403 is its status text; the supplier overpayment picks its
     // ending (" on this purchase" / " to this supplier") with a ternary.
     const notLiteral = new Set(['Unauthorized', 'Forbidden', '₹{amount} is more than the ₹{owed} owed on this purchase.', '₹{amount} is more than the ₹{owed} owed to this supplier.']);

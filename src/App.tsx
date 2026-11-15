@@ -8,6 +8,7 @@ import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
 import { Billing } from './pages/Billing';
 import { Items } from './pages/Items';
+import { ImportItems } from './pages/ImportItems';
 import { Customers } from './pages/Customers';
 import { CustomerPassbook } from './pages/CustomerPassbook';
 import { Suppliers } from './pages/Suppliers';
@@ -21,8 +22,9 @@ import { Reports } from './pages/Reports';
 import { Dashboard } from './pages/Dashboard';
 import { Settings } from './pages/Settings';
 import { QuickBill } from './pages/QuickBill';
-import { useHsnScanner } from './hooks/useHsnScanner';
 import { useItemNames } from './hooks/useItemNames';
+import { useLiveCatalogue } from './hooks/useLiveCatalogue';
+import { useSessionCheck } from './hooks/useSessionCheck';
 import { useItemNamesStore, useLanguageStore } from './i18n';
 
 const ProtectedRoute = ({ children, roles, bare }: { children: React.ReactNode; roles?: string[]; bare?: boolean }) => {
@@ -44,13 +46,11 @@ const ProtectedRoute = ({ children, roles, bare }: { children: React.ReactNode; 
 };
 
 /**
- * Everything that needs router context. The scanner hook reads the current
- * route so that it only listens on the billing screen, which means it cannot
- * be mounted above <BrowserRouter> as it used to be.
+ * Everything that needs router context. Barcode scanning is mounted by the
+ * pages that use it (Billing, Purchases, Items), so a scan elsewhere does
+ * nothing.
  */
 const AppRoutes = () => {
-  useHsnScanner();
-
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
@@ -79,6 +79,12 @@ const AppRoutes = () => {
         </ProtectedRoute>
       } />
       
+      <Route path="/items/import" element={
+        <ProtectedRoute roles={['admin']}>
+          <ImportItems />
+        </ProtectedRoute>
+      } />
+
       <Route path="/customers" element={
         <ProtectedRoute>
           <Customers />
@@ -163,6 +169,10 @@ export default function App() {
   const lang = useLanguageStore((state) => state.lang);
   useItemNamesStore((state) => state.names);
   useItemNames();
+  // Items bought, repriced or sold on other tills show here within seconds.
+  useLiveCatalogue();
+  // Still allowed in? On every open of the app, and on coming back to it.
+  useSessionCheck();
 
   useEffect(() => {
     document.documentElement.lang = lang;

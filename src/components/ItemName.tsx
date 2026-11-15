@@ -20,3 +20,9 @@ export const ItemName: React.FC<{ name: string | null | undefined; truncate?: bo
     </>
   );
 };
+
+/**
+ * The same for a customer's or a bakery's name: Kannada letters on a Kannada
+ * screen, the English (what is typed and searched) small underneath.
+ */
+export const LocalName = ItemName;

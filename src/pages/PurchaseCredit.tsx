@@ -7,6 +7,7 @@ import { SupplierPaymentModal } from '../components/SupplierPaymentModal';
 import { ageLabel, formatDay, formatRupees } from '../lib/supplierPayments';
 import { cn, formatDateInIST, getISTTimestampForFileName } from '../lib/utils';
 import { t, tn, withEnglish } from '../i18n';
+import { HEADER_NOTE } from '../lib/entryStyles';
 
 /** Unpaid this long is worth a second look. */
 const AGE_WARN_DAYS = 30;
@@ -62,7 +63,7 @@ export const PurchaseCredit = () => {
   const oldestDays = suppliers.reduce((acc, supplier) => Math.max(acc, supplier.oldest_age_days), 0);
 
   const handleExport = () => {
-    const header = ['Supplier', 'Supplier GSTIN', 'Purchase No.', 'Invoice No.', 'Invoice Date', 'Entered On', 'Total', 'Paid', 'Balance Due', 'Days Unpaid'];
+    const header = ['Supplier', 'Supplier GSTIN', 'Purchase No.', 'Invoice No.', 'Invoice Date', 'Entered On', 'Total (incl. GST)', 'Paid', 'Balance Due (incl. GST)', 'Days Unpaid'];
     const rows = suppliers.flatMap((supplier) =>
       supplier.purchases.map((p) => [
         supplier.name, supplier.gstin || '', p.purchase_number, p.invoice_number || '', p.invoice_date || '',
@@ -184,7 +185,7 @@ export const PurchaseCredit = () => {
                   <tr>
                     <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Purchase No.')}</th>
                     <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Invoice')}</th>
-                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Total')}</th>
+                    <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Total')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></th>
                     <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Paid')}</th>
                     <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Balance Due')}</th>
                     <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Unpaid For')}</th>

@@ -7,7 +7,10 @@ import { billCustomerContactName, billCustomerDisplayName } from '../lib/custome
 import { DateFilterButton, DateFilterPanel } from '../components/DateFilter';
 import { SalesPurchaseSwitch, useTradeView } from '../components/SalesPurchaseSwitch';
 import { paymentLabel, t, tn, unitLabel, withEnglish } from '../i18n';
-import { ItemName } from '../components/ItemName';
+import { HEADER_NOTE } from '../lib/entryStyles';
+import { ItemName, LocalName } from '../components/ItemName';
+import { supplierLabel } from '../lib/supplierPayments';
+import { gstScopeFilePart, GstScopeSwitch, inMyGst, matchesGstScope, type GstScope } from '../components/GstScopeSwitch';
 
 interface PurchaseReportRow {
   purchase_id: number;
@@ -52,12 +55,18 @@ interface SalesReportRow {
   hsn_code?: string;
   metric: string;
   quantity: number;
+  /** Before GST, per unit. */
   price: number;
+  /** Including GST, per unit. */
+  unit_price?: number | null;
   sgst_amount: number;
   cgst_amount: number;
   igst_amount?: number;
   total_amount: number;
+  /** The item's "Include in my GST" (1 unless unticked). */
+  in_my_gst?: number;
 }
+
 
 const escapeCsvValue = (value: string | number | null | undefined) => {
   const safeValue = value == null ? '' : String(value);
@@ -141,7 +150,7 @@ const PaymentMethodBreakdown = ({ title, description, total, parts, countLabel, 
           <p className="text-sm text-gray-500">{description}</p>
         </div>
         <div className="text-right">
-          <p className="text-xs font-bold uppercase text-gray-500">{t('Total')}</p>
+          <p className="text-xs font-bold uppercase text-gray-500">{t('Total')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></p>
           <p className="text-2xl font-black tabular-nums text-gray-900">{loading ? '…' : rupees(total)}</p>
         </div>
       </div>
@@ -190,6 +199,7 @@ export const Reports = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [truncated, setTruncated] = useState(false);
+  const [gstScope, setGstScope] = useState<GstScope>('all');
 
   // The date range is sent to the server so it filters in SQL. Only the side
   // on screen is loaded.
@@ -234,8 +244,10 @@ export const Reports = () => {
     [bills, normalizedSearch]
   );
   const filteredSalesRows = useMemo(
-    () => salesRows.filter((row) => matches(row.bill_number, row.customer_shop_name, row.customer_name, row.cashier_name, row.item_name, row.hsn_code)),
-    [salesRows, normalizedSearch]
+    () => salesRows.filter((row) =>
+      matchesGstScope(gstScope, row) &&
+      matches(row.bill_number, row.customer_shop_name, row.customer_name, row.cashier_name, row.item_name, row.hsn_code)),
+    [salesRows, normalizedSearch, gstScope]
   );
   const filteredPurchases = useMemo(
     () => purchases.filter((purchase) => matches(purchase.purchase_number, purchase.supplier_name, purchase.invoice_number, purchase.supplier_gstin)),
@@ -255,9 +267,11 @@ export const Reports = () => {
     }
 
     // The file reads the same in either language.
+    const scopeName = gstScopeFilePart(gstScope);
     withEnglish(() => downloadCsv(
-      `sales-report-${getISTTimestampForFileName()}.csv`,
-      ['Bill Number', 'Date & Time', 'Customer', 'Contact Person', 'Cashier', 'Payment Method', 'Item', 'HSN', 'Quantity', 'Metric', 'Base Price', 'SGST Amount', 'Other GST Amount', 'Line Total'],
+      `sales-report-${scopeName}${getISTTimestampForFileName()}.csv`,
+      ['Bill Number', 'Date & Time', 'Customer', 'Contact Person', 'Cashier', 'Payment Method', 'Item', 'HSN', 'Quantity', 'Metric',
+        'Unit Price (before GST)', 'Unit Price (incl. GST)', 'Taxable Value (before GST)', 'SGST Amount', 'CGST Amount', 'IGST Amount', 'Line Total (incl. GST)', 'In My GST'],
       filteredSalesRows.map((row) => [
         row.bill_number,
         formatDateTimeInIST(row.created_at, { month: '2-digit', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }),
@@ -270,9 +284,13 @@ export const Reports = () => {
         row.quantity,
         row.metric,
         row.price.toFixed(2),
+        (row.unit_price ?? (row.quantity ? row.total_amount / row.quantity : 0)).toFixed(2),
+        (row.total_amount - row.sgst_amount - row.cgst_amount - (row.igst_amount || 0)).toFixed(2),
         row.sgst_amount.toFixed(2),
-        (row.cgst_amount + (row.igst_amount || 0)).toFixed(2),
+        row.cgst_amount.toFixed(2),
+        (row.igst_amount || 0).toFixed(2),
         row.total_amount.toFixed(2),
+        inMyGst(row) ? 'Yes' : 'No',
       ])
     ));
   };
@@ -288,11 +306,11 @@ export const Reports = () => {
       // IGST columns were missing, so an inter-state purchase downloaded as if
       // it carried no tax. Selling price and profit % are recorded on each
       // purchase line and appear only here, not on screen.
-      ['Purchase Number', 'Date & Time', 'Supplier', 'Supplier GSTIN', 'Invoice Number', 'Invoice Date', 'Created By', 'Item', 'HSN', 'Quantity', 'Metric', 'Unit Cost (before GST)', 'SGST %', 'CGST %', 'IGST %', 'SGST Amount', 'CGST Amount', 'IGST Amount', 'Line Total', 'Selling Price (incl. GST)', 'Profit %'],
+      ['Purchase Number', 'Date & Time', 'Supplier', 'Supplier GSTIN', 'Invoice Number', 'Invoice Date', 'Created By', 'Item', 'HSN', 'Quantity', 'Metric', 'Unit Cost (before GST)', 'Taxable Value (before GST)', 'SGST %', 'CGST %', 'IGST %', 'SGST Amount', 'CGST Amount', 'IGST Amount', 'Line Total (incl. GST)', 'Selling Price (incl. GST)', 'Profit %'],
       filteredPurchaseRows.map((row) => [
         row.purchase_number,
         formatDateTimeInIST(row.created_at, { month: '2-digit', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        row.supplier_name,
+        supplierLabel(row.supplier_name),
         row.supplier_gstin || '',
         row.invoice_number || '',
         row.invoice_date ? formatDateInIST(row.invoice_date, { month: '2-digit', day: '2-digit', year: 'numeric' }) : '',
@@ -302,6 +320,7 @@ export const Reports = () => {
         row.quantity,
         row.metric,
         row.unit_cost.toFixed(2),
+        (row.total_amount - row.sgst_amount - row.cgst_amount - (row.igst_amount ?? 0)).toFixed(2),
         row.sgst_rate.toFixed(2),
         row.cgst_rate.toFixed(2),
         (row.igst_rate ?? 0).toFixed(2),
@@ -317,6 +336,10 @@ export const Reports = () => {
 
   const isSales = view === 'sales';
   const rowCount = isSales ? filteredSalesRows.length : filteredPurchaseRows.length;
+  // Narrowed to some items, the totals are those items' lines: a bill's
+  // discount and round off belong to the whole bill, not to an item.
+  const byItems = isSales && gstScope !== 'all';
+  const lineTax = (row: SalesReportRow) => row.sgst_amount + row.cgst_amount + (row.igst_amount || 0);
 
   return (
     <div className="space-y-6">
@@ -353,17 +376,37 @@ export const Reports = () => {
         </div>
       )}
 
+      {isSales && (
+        <div className="flex flex-col gap-2 rounded-3xl border border-gray-100 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <GstScopeSwitch value={gstScope} onChange={setGstScope} />
+          <p className="text-xs text-gray-500 sm:max-w-md sm:text-right">
+            {byItems
+              ? (gstScope === 'mine'
+                ? t('Only items ticked “Include in my GST”. Totals are of these item lines, before any bill discount or round off.')
+                : t('Only items not ticked “Include in my GST”. Totals are of these item lines, before any bill discount or round off.'))
+              : t('Choose “In my GST” to see only the items ticked “Include in my GST” in Items.')}
+          </p>
+        </div>
+      )}
+
       <div className="grid gap-4 grid-cols-2 xl:grid-cols-4">
-        {isSales ? (
+        {byItems ? (
           <>
-            <SummaryCard label={t('Sales total')} value={rupees(sum(filteredBills, (b) => b.total_amount))} />
+            <SummaryCard label={t('Sales total (incl. GST)')} value={rupees(sum(filteredSalesRows, (row) => row.total_amount))} />
+            <SummaryCard label={t('GST collected')} value={rupees(sum(filteredSalesRows, lineTax))} tone="orange" />
+            <SummaryCard label={t('Taxable value (before GST)')} value={rupees(sum(filteredSalesRows, (row) => row.total_amount - lineTax(row)))} />
+            <SummaryCard label={t('Bills')} value={new Set(filteredSalesRows.map((row) => row.bill_id)).size.toLocaleString('en-IN')} />
+          </>
+        ) : isSales ? (
+          <>
+            <SummaryCard label={t('Sales total (incl. GST)')} value={rupees(sum(filteredBills, (b) => b.total_amount))} />
             <SummaryCard label={t('GST collected')} value={rupees(sum(filteredBills, (b) => b.tax_amount))} tone="orange" />
-            <SummaryCard label={t('Taxable value')} value={rupees(sum(filteredBills, (b) => b.subtotal_amount ?? b.total_amount - b.tax_amount))} />
+            <SummaryCard label={t('Taxable value (before GST)')} value={rupees(sum(filteredBills, (b) => b.subtotal_amount ?? b.total_amount - b.tax_amount))} />
             <SummaryCard label={t('Bills')} value={filteredBills.length.toLocaleString('en-IN')} />
           </>
         ) : (
           <>
-            <SummaryCard label={t('Purchase total')} value={rupees(sum(filteredPurchases, (p) => p.total_amount))} />
+            <SummaryCard label={t('Purchase total (incl. GST)')} value={rupees(sum(filteredPurchases, (p) => p.total_amount))} />
             <SummaryCard label={t('GST paid')} value={rupees(sum(filteredPurchases, (p) => p.tax_amount))} tone="amber" />
             <SummaryCard label={t('Still owed')} value={rupees(sum(filteredPurchases, (p) => p.balance_due ?? 0))} tone="red" />
             <SummaryCard label={t('Purchases')} value={filteredPurchases.length.toLocaleString('en-IN')} />
@@ -371,7 +414,7 @@ export const Reports = () => {
         )}
       </div>
 
-      {isSales ? (
+      {byItems ? null : isSales ? (
         <PaymentMethodBreakdown
           title={t('How bills were paid')}
           description={t('Cash, UPI and credit for the bills in this period. A bill paid partly one way and partly another is counted under each part.')}
@@ -434,9 +477,9 @@ export const Reports = () => {
                   <th className={headCell}>{t('Method')}</th>
                   <th className={headCell}>{t('Item')}</th>
                   <th className={cn(headCell, 'text-right')}>{t('Qty')}</th>
-                  <th className={cn(headCell, 'text-right')}>{t('Base Price')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('Unit Price')}<span className={HEADER_NOTE}>{t('before GST')}</span></th>
                   <th className={cn(headCell, 'text-right')}>{t('GST')}</th>
-                  <th className={cn(headCell, 'text-right')}>{t('Total')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('Total')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -449,12 +492,15 @@ export const Reports = () => {
                     <tr key={`${row.bill_id}-${row.item_id}-${index}`} className="hover:bg-gray-50 transition-colors">
                       <td className="px-6 py-4 font-mono font-bold text-gray-900">{row.bill_number}</td>
                       <td className="px-6 py-4 text-sm text-gray-600 whitespace-nowrap">{formatDateTimeInIST(row.created_at)}</td>
-                      <td className="px-6 py-4 text-sm text-gray-700">{billCustomerDisplayName(row)}</td>
+                      <td className="px-6 py-4 text-sm text-gray-700"><LocalName name={billCustomerDisplayName(row)} /></td>
                       <td className="px-6 py-4 text-sm text-gray-600">{row.cashier_name}</td>
                       <td className="px-6 py-4 text-sm uppercase text-gray-600">{paymentLabel(row.payment_method)}</td>
                       <td className="px-6 py-4">
                         <p className="font-semibold text-gray-900"><ItemName name={row.item_name} /></p>
-                        <p className="text-xs text-gray-500">{t('HSN:')} {row.hsn_code || t('Not set')}</p>
+                        <p className="text-xs text-gray-500">
+                          {t('HSN:')} {row.hsn_code || t('Not set')}
+                          {!inMyGst(row) && <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 font-bold text-gray-500">{t('Not in my GST')}</span>}
+                        </p>
                       </td>
                       <td className="px-6 py-4 text-right text-sm text-gray-700 whitespace-nowrap">{row.quantity} {unitLabel(row.metric)}</td>
                       <td className="px-6 py-4 text-right text-sm text-gray-700">{rupees(row.price)}</td>
@@ -476,10 +522,10 @@ export const Reports = () => {
                   <th className={headCell}>{t('Invoice')}</th>
                   <th className={headCell}>{t('Item')}</th>
                   <th className={cn(headCell, 'text-right')}>{t('Qty')}</th>
-                  <th className={cn(headCell, 'text-right')}>{t('Unit Cost')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('Unit Cost')}<span className={HEADER_NOTE}>{t('before GST')}</span></th>
                   <th className={headCell}>{t('Created By')}</th>
                   <th className={cn(headCell, 'text-right')}>{t('GST')}</th>
-                  <th className={cn(headCell, 'text-right')}>{t('Total')}</th>
+                  <th className={cn(headCell, 'text-right')}>{t('Total')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -493,7 +539,7 @@ export const Reports = () => {
                       <td className="px-6 py-4 font-mono font-bold text-gray-900">{row.purchase_number}</td>
                       <td className="px-6 py-4 text-sm text-gray-600 whitespace-nowrap">{formatDateTimeInIST(row.created_at)}</td>
                       <td className="px-6 py-4">
-                        <p className="font-semibold text-gray-900">{row.supplier_name}</p>
+                        <p className="font-semibold text-gray-900">{supplierLabel(row.supplier_name)}</p>
                         <p className="text-xs text-gray-500">{row.supplier_phone || t('No phone')}</p>
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-600">{row.supplier_gstin || 'N/A'}</td>

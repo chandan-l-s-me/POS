@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 /**
- * The Android app ("Vyapara Billing"): a native shell around the live site.
+ * The Android app ("Vasavi Billing"): a native shell around the live site.
  *
  * It opens the Quick Bill screen straight from the shop's server
  * (pos.chandanls.in, through the Cloudflare Tunnel), so every phone always
@@ -15,7 +15,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
  */
 const config: CapacitorConfig = {
   appId: 'in.chandanls.pos',
-  appName: 'Vyapara Billing',
+  appName: 'Vasavi Billing',
   // Required by Capacitor; the app loads server.url instead.
   webDir: 'dist',
   server: {

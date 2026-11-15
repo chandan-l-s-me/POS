@@ -1,3 +1,6 @@
+import type { BulkPrice } from './lib/billMath';
+export type { BulkPrice };
+
 export interface User {
   id: number;
   username: string;
@@ -10,6 +13,8 @@ export interface StaffAccount extends User {
   is_active: number;
   /** 1 once the account has signed in or made any record; it can then only be deactivated. */
   in_use?: number;
+  /** 1 for the admin set in .env (REMOTE_ADMIN_USERNAME), the one that can sign in from the internet. */
+  env_managed?: number;
 }
 
 export interface AuditLog {
@@ -41,6 +46,8 @@ export interface Item {
   /** The name in Kannada: translated automatically, or typed by an admin. Null until then. */
   name_kn?: string | null;
   hsn_code: string;
+  /** The code a scanner reads off the pack, normalized (no spaces, upper case). Null if none. */
+  barcode?: string | null;
   /**
    * GST-inclusive selling price of the batch that sells next (the oldest with
    * stock left). A cache maintained by the server — never set directly.
@@ -59,6 +66,13 @@ export interface Item {
   stock_quantity: number;
   /** Profit margin used on the last purchase, offered on the next one. */
   default_profit_percent?: number | null;
+  /** Lower prices for buying in quantity, smallest quantity first. See src/lib/billMath.ts. */
+  bulk_prices?: BulkPrice[];
+  /**
+   * "Include in my GST": shown in the sales report's In my GST view. 1 unless
+   * unticked. A report view only; bills charge and print GST either way.
+   */
+  in_my_gst?: number | boolean;
   created_at: string;
 }
 
@@ -195,6 +209,9 @@ export interface Bill {
   upi_amount: number;
   credit_amount: number;
   created_at: string;
+  /** When the bill was last edited (History → Edit Bill), and by whom. */
+  edited_at?: string | null;
+  edited_by?: string | null;
   items?: BillItem[];
 }
 
@@ -295,7 +312,8 @@ export interface SupplierCredit {
 export interface PaidPurchase {
   id: number;
   purchase_number: string;
-  supplier_id: number;
+  /** null for a purchase saved without a supplier. */
+  supplier_id: number | null;
   supplier_name: string;
   invoice_number?: string | null;
   invoice_date?: string | null;
@@ -311,8 +329,9 @@ export interface PaidPurchase {
 
 export interface SupplierPayment {
   id: number;
-  supplier_id: number;
-  supplier_name: string;
+  /** null when paid as a purchase without a supplier was saved. */
+  supplier_id: number | null;
+  supplier_name: string | null;
   amount: number;
   paid_on: string;
   method: SupplierPaymentMethod | null;
@@ -355,6 +374,8 @@ export interface CartItem extends Item {
   unit_price: number;
   /** How the line is charged: one segment, or several when it crosses batches. */
   segments: CartSegment[];
+  /** The bulk price this quantity earns, if any. */
+  bulk_price?: BulkPrice | null;
 }
 
 /** Part of a customer's balance: a credit bill (or opening balance) not yet paid off. */
@@ -417,6 +438,8 @@ export interface StockRow {
   sold_recent: number;
   /** Days the stock lasts at the recent rate; null when it has not sold. */
   days_left: number | null;
+  /** The item's "Include in my GST" (1 unless unticked). */
+  in_my_gst?: number;
 }
 
 export interface StockSummary {

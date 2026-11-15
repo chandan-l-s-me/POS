@@ -1,5 +1,5 @@
 // A consistent copy of the live database, safe while the server is running,
-// checked before it is trusted. Used by Update Vyapara.bat before it touches
+// checked before it is trusted. Used by Update Vasavi.bat before it touches
 // anything.
 //   node tools/backup.mjs <database> <copy to>
 import { createRequire } from 'node:module';

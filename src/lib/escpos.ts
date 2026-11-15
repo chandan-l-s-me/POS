@@ -91,7 +91,12 @@ export const receiptLines = (bill: Bill, settings: ShopSettings, paper: PaperWid
     for (const line of wrap(item.item_name, width)) text(line);
     const unit = item.unit_price ?? (item.quantity ? item.total_amount / item.quantity : 0);
     text(pair(`  ${item.quantity} ${ascii(item.metric)} x ${money(unit)}`, money(item.total_amount), width));
+    // Every item's GST, rate and amount.
+    const tax = Number(item.sgst_amount || 0) + Number(item.cgst_amount || 0) + Number(item.igst_amount || 0);
+    const rate = Number(item.igst_rate || 0) || Number(item.sgst_rate || 0) + Number(item.cgst_rate || 0);
+    if (tax > 0 || rate > 0) text(`  GST ${Math.round(rate * 100) / 100}%: ${money(tax)}`);
   }
+  text('Prices include GST');
   out.push({ kind: 'rule' });
 
   const items = bill.items ?? [];
@@ -101,7 +106,7 @@ export const receiptLines = (bill: Bill, settings: ShopSettings, paper: PaperWid
   const sgst = sum('sgst_amount');
   const igst = sum('igst_amount');
   const subtotal = Number(bill.subtotal_amount || 0);
-  text(pair('Subtotal', money(subtotal), width));
+  text(pair('Subtotal (before GST)', money(subtotal), width));
   if (cgst) text(pair('CGST', money(cgst), width));
   if (sgst) text(pair('SGST', money(sgst), width));
   if (igst) text(pair('IGST', money(igst), width));

@@ -172,6 +172,50 @@ export const allocateFifo = (batches: FifoBatch[], quantity: number) => {
   return { allocations, shortfall: need > 0 ? need : 0 };
 };
 
+// ---------------------------------------------------------------------------
+// Bulk prices
+
+/**
+ * A lower price for buying in quantity: `min_quantity` or more of the item on
+ * one bill and every unit sells at `price` (GST-inclusive, like every selling
+ * price). An item can have several, e.g. 10+ at ₹45 and 50+ at ₹42.
+ */
+export interface BulkPrice {
+  min_quantity: number;
+  price: number;
+}
+
+/** The bulk price `quantity` reaches: the one with the largest quantity at or below it. Null if none. */
+export const bulkPriceFor = (rules: readonly BulkPrice[] | null | undefined, quantity: number): BulkPrice | null => {
+  const qty = round3(quantity);
+  let best: BulkPrice | null = null;
+  for (const rule of rules ?? []) {
+    if (qty >= rule.min_quantity && (!best || rule.min_quantity > best.min_quantity)) best = rule;
+  }
+  return best;
+};
+
+/** The next bulk price above `quantity`, for "buy 10 for ₹45 each". Null if none. */
+export const nextBulkPrice = (rules: readonly BulkPrice[] | null | undefined, quantity: number): BulkPrice | null => {
+  const qty = round3(quantity);
+  let next: BulkPrice | null = null;
+  for (const rule of rules ?? []) {
+    if (rule.min_quantity > qty && (!next || rule.min_quantity < next.min_quantity)) next = rule;
+  }
+  return next;
+};
+
+/**
+ * Charge the bulk price on every unit. A batch already selling for less keeps
+ * its own price, so buying more never costs more per unit.
+ */
+export const applyBulkPrice = (allocations: Allocation[], rule: BulkPrice | null): Allocation[] =>
+  rule
+    ? allocations.map((allocation) =>
+        allocation.selling_price > rule.price ? { ...allocation, selling_price: rule.price } : allocation
+      )
+    : allocations;
+
 export interface PriceSegment {
   unit_price: number;
   quantity: number;

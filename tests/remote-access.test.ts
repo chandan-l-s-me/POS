@@ -80,6 +80,54 @@ describe('sign-in through the tunnel', () => {
   });
 });
 
+describe('admin accounts only at the shop computer', () => {
+  const viaTunnel = (token: string, url = '/api/settings') =>
+    fetch(`${server.baseUrl}${url}`, { headers: { Authorization: `Bearer ${token}`, 'CF-Connecting-IP': '203.0.113.77' } });
+
+  it('refuses admin sign-in from the website or app, with the right password', async () => {
+    const remote = await login('admin', ADMIN_PASSWORD, '203.0.113.77');
+    assert.equal(remote.status, 403);
+    assert.equal(remote.body.code, 'ADMIN_LOCAL_ONLY');
+    assert.equal(remote.body.token, undefined, 'no session is handed out');
+    assert.equal((await login('admin', ADMIN_PASSWORD)).status, 200, 'the counter signs in as before');
+  });
+
+  it('says nothing about admins to someone without the password', async () => {
+    const wrong = await login('admin', 'not-the-password-1', '203.0.113.78');
+    assert.equal(wrong.status, 401);
+    assert.equal(wrong.body.error, 'Invalid username or password');
+  });
+
+  it('stops an admin session from being used away from the counter', async () => {
+    const local = await login('admin', ADMIN_PASSWORD);
+    assert.equal((await fetch(`${server.baseUrl}/api/settings`, { headers: { Authorization: `Bearer ${local.body.token}` } })).status, 200);
+    const outside = await viaTunnel(local.body.token);
+    assert.equal(outside.status, 401, 'signs the app out');
+    assert.equal((await outside.json()).code, 'ADMIN_LOCAL_ONLY');
+  });
+
+  it('still lets cashiers in from the website or app', async () => {
+    const remote = await login('visitor-a', 'right-pass-123', '198.51.100.20');
+    assert.equal(remote.status, 200);
+    assert.equal(remote.body.user.role, 'cashier');
+    assert.equal((await viaTunnel(remote.body.token)).status, 200);
+  });
+
+  it('can be lifted with ALLOW_REMOTE_ADMIN=on', async () => {
+    const open = await startServer({ ALLOW_REMOTE_ADMIN: 'on' });
+    try {
+      const res = await fetch(`${open.baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.79' },
+        body: JSON.stringify({ username: 'admin', password: ADMIN_PASSWORD }),
+      });
+      assert.equal(res.status, 200);
+    } finally {
+      await open.stop();
+    }
+  });
+});
+
 describe('development mode', () => {
   it('refuses tunnel traffic so the dev server is never exposed', async () => {
     const dev = await startServer({ NODE_ENV: 'development' });

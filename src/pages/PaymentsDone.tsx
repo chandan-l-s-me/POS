@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Download, Search, Trash2, X } from 'lucide-react';
 import { api } from '../api';
 import type { PaidPurchase, PurchasePayment, SupplierPayment } from '../types';
-import { formatDay, formatRupees, paymentMethodLabel, paymentMethodsLabel } from '../lib/supplierPayments';
+import { formatDay, formatRupees, paymentMethodLabel, paymentMethodsLabel, supplierLabel } from '../lib/supplierPayments';
 import { cn, formatDateInIST, formatDateTimeInIST, getISTTimestampForFileName } from '../lib/utils';
 import { t, tn, withEnglish } from '../i18n';
+import { HEADER_NOTE } from '../lib/entryStyles';
 
 const PAGE_SIZE = 50;
 const EXPORT_CAP = 20000;
@@ -127,9 +128,9 @@ export const PaymentsDone = () => {
           api.getPaidPurchases({ ...range, search: appliedSearch || undefined, offset }));
         // The files read the same in either language.
         withEnglish(() => downloadCsv('payments-done', [
-          'Purchase No.', 'Supplier', 'Invoice No.', 'Invoice Date', 'Entered On', 'Total', 'Paid', 'Fully Paid On', 'Payments', 'Methods',
+          'Purchase No.', 'Supplier', 'Invoice No.', 'Invoice Date', 'Entered On', 'Total (incl. GST)', 'Paid', 'Fully Paid On', 'Payments', 'Methods',
         ], rows.map((p) => [
-          p.purchase_number, p.supplier_name, p.invoice_number, p.invoice_date, formatDateInIST(p.created_at),
+          p.purchase_number, supplierLabel(p.supplier_name), p.invoice_number, p.invoice_date, formatDateInIST(p.created_at),
           p.total_amount.toFixed(2), p.amount_paid.toFixed(2), p.paid_off_on, p.payment_count, paymentMethodsLabel(p.methods),
         ])));
       } else {
@@ -137,7 +138,7 @@ export const PaymentsDone = () => {
         withEnglish(() => downloadCsv('supplier-payments', [
           'Paid On', 'Supplier', 'Amount', 'Method', 'Reference', 'Purchases Settled', 'Note', 'Entered By', 'Entered At',
         ], rows.map((p) => [
-          p.paid_on, p.supplier_name, p.amount.toFixed(2), paymentMethodLabel(p.method), p.reference,
+          p.paid_on, supplierLabel(p.supplier_name), p.amount.toFixed(2), paymentMethodLabel(p.method), p.reference,
           p.allocations.map((a) => `${a.purchase_number} (${a.amount.toFixed(2)})`).join('; '),
           p.note, p.user_name, formatDateTimeInIST(p.created_at),
         ])));
@@ -248,7 +249,7 @@ export const PaymentsDone = () => {
                   <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Purchase No.')}</th>
                   <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Supplier')}</th>
                   <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Invoice')}</th>
-                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Total')}</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Total')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></th>
                   <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Fully Paid On')}</th>
                   <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase">{t('Method')}</th>
                 </tr>
@@ -268,7 +269,7 @@ export const PaymentsDone = () => {
                         <p className="font-mono font-bold text-gray-900">{purchase.purchase_number}</p>
                         <p className="text-xs text-gray-400">{t('Entered {created_at}', { created_at: formatDateInIST(purchase.created_at) })}</p>
                       </td>
-                      <td className="px-6 py-3 font-semibold text-gray-900">{purchase.supplier_name}</td>
+                      <td className="px-6 py-3 font-semibold text-gray-900">{supplierLabel(purchase.supplier_name)}</td>
                       <td className="px-6 py-3 text-sm text-gray-600">
                         <p>{purchase.invoice_number || t('No invoice no.')}</p>
                         <p className="text-xs text-gray-400">{formatDay(purchase.invoice_date)}</p>
@@ -348,7 +349,7 @@ export const PaymentsDone = () => {
                   <tr key={payment.id} className="align-top hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-3 text-sm text-gray-700 whitespace-nowrap">{formatDay(payment.paid_on)}</td>
                     <td className="px-6 py-3">
-                      <p className="font-semibold text-gray-900">{payment.supplier_name}</p>
+                      <p className="font-semibold text-gray-900">{supplierLabel(payment.supplier_name)}</p>
                       {payment.note && <p className="text-xs text-gray-400">{payment.note}</p>}
                     </td>
                     <td className="px-6 py-3 text-right tabular-nums font-bold text-gray-900">{formatRupees(payment.amount)}</td>
@@ -369,7 +370,11 @@ export const PaymentsDone = () => {
                       <p className="text-xs text-gray-400">{formatDateTimeInIST(payment.created_at)}</p>
                     </td>
                     <td className="px-6 py-3 text-right whitespace-nowrap">
-                      {confirmRemove === payment.id ? (
+                      {payment.supplier_id == null ? (
+                        // Paid as a purchase without a supplier was saved: removing
+                        // it would leave that purchase owing no one.
+                        <span className="text-xs text-gray-400" title={t('Paid when a purchase without a supplier was saved, so it cannot be removed.')}>—</span>
+                      ) : confirmRemove === payment.id ? (
                         <span className="inline-flex items-center gap-2">
                           <button
                             onClick={() => removePayment(payment.id)}

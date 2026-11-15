@@ -12,9 +12,14 @@ import { GST_SLABS, round2, saleGstRate, type TaxableItem } from '../lib/billMat
 import { UNIT_OPTIONS } from '../lib/units';
 import { HEADER_NOTE, ROW_FIELD, TABLE_HEAD_ROW } from '../lib/entryStyles';
 import { useAnchoredMenu } from '../hooks/useAnchoredMenu';
-import { PAYMENT_METHOD_OPTIONS } from '../lib/supplierPayments';
-import { t, unitLabel } from '../i18n';
+import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
+import { barcodeProblem, findByBarcode, looksLikeBarcode, normalizeBarcode } from '../lib/barcode';
+import { lookupBarcode } from '../lib/barcodeLookup';
+import { PAYMENT_METHOD_OPTIONS, supplierLabel } from '../lib/supplierPayments';
+import { itemLabel, t, unitLabel } from '../i18n';
 import { ItemName } from '../components/ItemName';
+import { searchList } from '../lib/fuzzy';
+import { ITEM_SEARCH } from '../lib/searchFields';
 
 /**
  * How this purchase is being paid. On credit by default: forgetting to mark a
@@ -79,6 +84,12 @@ interface PurchaseRowState {
    */
   hsn_code: string;
   metric: string;
+  /**
+   * The barcode on the pack, optional. Scanning one an item already has
+   * fills the row with that item. Otherwise it is saved on the row's item when
+   * the purchase saves: a new item, or an existing one that has none yet.
+   */
+  barcode: string;
 }
 
 type CostBasis = 'before_gst' | 'after_gst';
@@ -135,6 +146,7 @@ const createEmptyRow = (): PurchaseRowState => ({
   selling_price: 0,
   hsn_code: '',
   metric: '',
+  barcode: '',
 });
 
 const isRowEmpty = (row: PurchaseRowState) =>
@@ -146,7 +158,8 @@ const isRowEmpty = (row: PurchaseRowState) =>
   row.gst_mode === 'split' &&
   row.selling_price === 0 &&
   row.hsn_code === '' &&
-  row.metric === '';
+  row.metric === '' &&
+  row.barcode === '';
 
 const normalizeRows = (rows: PurchaseRowState[]) => {
   const meaningfulRows = rows.filter((row) => !isRowEmpty(row));
@@ -253,7 +266,15 @@ function getLastSellingPrice(purchaseRows: PurchaseReportRow[], item: Item) {
 }
 
 export const Purchases = () => {
-  const { items, refreshItems } = useDataStore();
+  const { items: cachedItems, refreshItems } = useDataStore();
+  // Items a scan found on the server, beyond the copy of the catalogue this
+  // device holds (a shop with more than 1000 items).
+  const [scannedItems, setScannedItems] = useState<Item[]>([]);
+  const items = useMemo(() => {
+    if (scannedItems.length === 0) return cachedItems;
+    const cached = new Set(cachedItems.map((item) => item.id));
+    return [...cachedItems, ...scannedItems.filter((item) => !cached.has(item.id))];
+  }, [cachedItems, scannedItems]);
   const formRef = useRef<HTMLFormElement | null>(null);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [purchaseRows, setPurchaseRows] = useState<PurchaseReportRow[]>([]);
@@ -386,14 +407,17 @@ export const Purchases = () => {
     );
   };
 
-  const selectItem = (rowIndex: number, itemId: number) => {
-    const item = items.find((entry) => entry.id === itemId);
+  const selectItem = (rowIndex: number, itemId: number, found?: Item) => {
+    const item = found ?? items.find((entry) => entry.id === itemId);
     if (!item) return;
 
     const latestCost = getLatestCostForSupplierItem(purchaseRows, form.supplier_name, itemId);
     upsertRow(rowIndex, {
       item_id: item.id,
       item_query: item.name,
+      // The item's own barcode; one scanned or typed in this row stays, to
+      // be saved on an item that has none.
+      barcode: item.barcode || usePurchaseDraft.getState().rows[rowIndex]?.barcode || '',
       ...(latestCost ?? { cost: 0, cost_basis: 'before_gst' }),
       gst_mode: item.gst_mode || (item.igst_rate ? 'igst' : 'split'),
       gst_percent: Number(item.gst_rate || item.igst_rate || item.sgst_rate + item.cgst_rate || 0),
@@ -401,6 +425,73 @@ export const Purchases = () => {
       selling_price: getLastSellingPrice(purchaseRows, item),
     });
     setActiveItemRow(null);
+  };
+
+  /** Put the cursor in a row's quantity box, once the row has rendered. */
+  const focusQuantity = (rowIndex: number) => {
+    window.setTimeout(() => {
+      const box = formRef.current?.querySelector<HTMLInputElement>(`[data-qty-row="${rowIndex}"]`);
+      box?.focus();
+      box?.select();
+    }, 0);
+  };
+
+  const focusItemName = (rowIndex: number) => {
+    window.setTimeout(() => itemInputRefs.current.get(rowIndex)?.focus(), 0);
+  };
+
+  /**
+   * A barcode scanned or typed for a row. An item that has it fills the row
+   * (or, if it is already on another row, the cursor goes to that row's
+   * quantity). A code no item has stays on the row, to be saved with it, and
+   * the cursor goes to the item name if that is still empty.
+   */
+  const applyBarcode = async (rowIndex: number, text: string) => {
+    const code = normalizeBarcode(text);
+    if (!code) return;
+    let item: Item | undefined;
+    try {
+      item = await lookupBarcode(code);
+    } catch (error: any) {
+      alert(error?.message || t('Could not look up the barcode. Try again.'));
+      return;
+    }
+    const current = usePurchaseDraft.getState().rows;
+    if (item) {
+      const found = item;
+      if (!cachedItems.some((entry) => entry.id === found.id)) {
+        setScannedItems((list) => [...list.filter((entry) => entry.id !== found.id), found]);
+      }
+      const otherRow = current.findIndex((row, index) => index !== rowIndex && row.item_id === found.id);
+      if (otherRow >= 0) {
+        // Already being bought on another row: add to that one.
+        const here = current[rowIndex];
+        if (here && !here.item_id && here.item_query.trim() === '') upsertRow(rowIndex, { barcode: '' });
+        focusQuantity(otherRow);
+        return;
+      }
+      if (current[rowIndex]?.item_id !== found.id) selectItem(rowIndex, found.id, found);
+      focusQuantity(rowIndex);
+      return;
+    }
+    upsertRow(rowIndex, { barcode: code });
+    if (!current[rowIndex]?.item_query.trim()) focusItemName(rowIndex);
+    else focusQuantity(rowIndex);
+  };
+
+  // A scan with the cursor outside the barcode and item boxes goes to the
+  // empty row at the bottom (or the row already buying that item).
+  useBarcodeScanner((code) => {
+    const current = usePurchaseDraft.getState().rows;
+    void applyBarcode(current.length - 1, code);
+  });
+
+  /** Another item that already has this row's barcode, if any. */
+  const barcodeOwner = (row: PurchaseRowState) => {
+    const code = normalizeBarcode(row.barcode);
+    if (!code) return undefined;
+    const owner = findByBarcode(items, code);
+    return owner && owner.id !== row.item_id ? owner : undefined;
   };
 
   /**
@@ -498,11 +589,16 @@ export const Purchases = () => {
     );
   }, [filledRows]);
 
+  // The supplier is optional. Without one there is no one to owe, so the
+  // purchase is paid in full.
+  const noSupplier = !form.supplier_name.trim();
+  const paymentMode: PaymentMode = noSupplier ? 'full' : payment.mode;
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
-    if (!form.supplier_name.trim()) {
-      alert(t('Supplier name is required.'));
+    if (noSupplier && (form.supplier_phone.trim() || form.supplier_address.trim() || form.supplier_gstin.trim())) {
+      alert(t('Enter the supplier name to save their phone, GSTIN or address.'));
       return;
     }
 
@@ -534,6 +630,28 @@ export const Purchases = () => {
       return;
     }
 
+    const badBarcode = filledRows.find((row) => barcodeProblem(normalizeBarcode(row.barcode)));
+    if (badBarcode) {
+      alert(t('Check the barcode for {value}: {problem}', {
+        value: badBarcode.item_query.trim(),
+        problem: t(barcodeProblem(normalizeBarcode(badBarcode.barcode))!),
+      }));
+      return;
+    }
+    const taken = filledRows.find((row) => barcodeOwner(row));
+    if (taken) {
+      alert(t('Barcode {code} is already on {item}.', { code: normalizeBarcode(taken.barcode), item: itemLabel(barcodeOwner(taken)!.name) }));
+      return;
+    }
+    const codes = filledRows
+      .map((row) => ({ code: normalizeBarcode(row.barcode), key: row.item_id ? `id:${row.item_id}` : `new:${row.item_query.trim().toLowerCase()}` }))
+      .filter((entry) => entry.code);
+    const clash = codes.find((entry, index) => codes.some((other, j) => j < index && other.code === entry.code && other.key !== entry.key));
+    if (clash) {
+      alert(t('Barcode {code} is on two different items in this purchase.', { code: clash.code }));
+      return;
+    }
+
     const unpriced = filledRows.filter((row) => !(row.selling_price > 0));
     if (unpriced.length > 0) {
       alert(
@@ -544,11 +662,11 @@ export const Purchases = () => {
 
     const grandTotal = round2(totals.total);
     const partAmount = round2(Number(payment.amount) || 0);
-    if (payment.mode === 'part' && !(partAmount > 0 && partAmount < grandTotal)) {
+    if (paymentMode === 'part' && !(partAmount > 0 && partAmount < grandTotal)) {
       alert(t('Enter the amount paid now — more than 0 and less than the total of Rs. {value}.', { value: grandTotal.toFixed(2) }));
       return;
     }
-    const amountPaid = payment.mode === 'full' ? grandTotal : payment.mode === 'part' ? partAmount : 0;
+    const amountPaid = paymentMode === 'full' ? grandTotal : paymentMode === 'part' ? partAmount : 0;
 
     setSaving(true);
     try {
@@ -569,6 +687,10 @@ export const Purchases = () => {
           ...(isNewItemRow(row)
             ? { new_item: { name: row.item_query.trim(), hsn_code: row.hsn_code.trim(), metric: row.metric } }
             : { item_id: row.item_id }),
+          // Only to give an item a barcode; one it already has is left alone.
+          ...(normalizeBarcode(row.barcode) && !items.find((item) => item.id === row.item_id)?.barcode
+            ? { barcode: normalizeBarcode(row.barcode) }
+            : {}),
           quantity: row.quantity,
           unit_cost: row.unit_cost,
           sgst_rate: row.sgst_rate,
@@ -631,7 +753,9 @@ export const Purchases = () => {
         <form ref={formRef} onSubmit={handleSubmit} className="p-6 2xl:p-8 space-y-8">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <div className="space-y-2 relative">
-              <label className="text-sm font-semibold text-gray-700">{t('Supplier Name')}</label>
+              <label className="text-sm font-semibold text-gray-700">
+                {t('Supplier Name')} <span className="font-normal text-gray-400">{t('(optional)')}</span>
+              </label>
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                 <input
@@ -661,9 +785,8 @@ export const Purchases = () => {
                       advanceFocus(e.currentTarget);
                     }
                   }}
-                  placeholder={t('Type supplier name')}
+                  placeholder={t('Type supplier name, or leave empty')}
                   className="w-full pl-11 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none"
-                  required
                 />
               </div>
 
@@ -788,7 +911,7 @@ export const Purchases = () => {
             <div>
               <h2 className="text-lg font-bold text-gray-900">{t('Purchase Items')}</h2>
               <p className="text-sm text-gray-500">
-                {t('Search an item and keep pressing Enter to move across the row. Enter the cost either before or after GST — the other is worked out from the GST. The selling price is what this stock is billed at, once older stock has sold. Type a name that is not in the list to add it as a new item.')}
+                {t('Scan a barcode or search an item, and keep pressing Enter to move across the row. Enter the cost either before or after GST — the other is worked out from the GST. The selling price is what this stock is billed at, once older stock has sold. Type a name that is not in the list to add it as a new item.')}
               </p>
             </div>
 
@@ -796,8 +919,9 @@ export const Purchases = () => {
               {/* Every column has a width, adding up to the narrowest the table
                   goes (984px). On a wider screen the browser shares the extra
                   out in proportion, so the item name never hogs it. */}
-              <table className="w-full min-w-[984px] table-fixed text-left text-sm">
+              <table className="w-full min-w-[1120px] table-fixed text-left text-sm">
                 <colgroup>
+                  <col className="w-[136px]" />
                   <col className="w-[176px]" />
                   <col className="w-[104px]" />
                   <col className="w-[96px]" />
@@ -810,7 +934,10 @@ export const Purchases = () => {
                 </colgroup>
                 <thead className="bg-gray-50">
                   <tr className={TABLE_HEAD_ROW}>
-                    <th className="pl-4 pr-2 py-3">{t('Item')}</th>
+                    <th className="pl-4 pr-2 py-3">
+                      {t('Barcode')}<span className={HEADER_NOTE}>{t('optional')}</span>
+                    </th>
+                    <th className="px-2 py-3">{t('Item')}</th>
                     <th className="px-2 py-3">{t('HSN')}</th>
                     <th className="px-2 py-3">{t('Metric')}</th>
                     <th className="px-2 py-3 text-right">{t('Qty')}</th>
@@ -831,13 +958,8 @@ export const Purchases = () => {
                 </thead>
                 <tbody className="divide-y divide-gray-100 bg-white">
                   {computedRows.map((row, rowIndex) => {
-                    const itemSuggestions = items
-                      .filter((item) => {
-                        const query = row.item_query.trim().toLowerCase();
-                        if (!query) return true;
-                        return item.name.toLowerCase().includes(query) || item.hsn_code?.includes(query);
-                      })
-                      .slice(0, 8);
+                    // Forgives a slip ("suger" finds Sugar) when nothing contains the text.
+                    const itemSuggestions = searchList(items, row.item_query, ITEM_SEARCH).slice(0, 8);
 
                     const isTrailingEmpty = rowIndex === computedRows.length - 1 && isRowEmpty(row);
                     const isNew = isNewItemRow(row);
@@ -846,14 +968,68 @@ export const Purchases = () => {
                     const belowCost = sellsBelowCost(row);
                     const unit = selected ? selected.metric : row.metric;
                     const knownUnit = UNIT_OPTIONS.some((option) => option.value === unit);
+                    const ownBarcode = selected?.barcode || '';
+                    const typedBarcode = normalizeBarcode(row.barcode);
+                    const barcodeIssue = typedBarcode ? barcodeProblem(typedBarcode) : null;
+                    const takenBy = barcodeOwner(row);
                     const showItemMenu =
                       activeItemRow === rowIndex && itemMenuStyle && (itemSuggestions.length > 0 || row.item_query.trim() !== '');
 
                     return (
                       <tr key={rowIndex} className={cn('align-top', isTrailingEmpty && 'bg-orange-50/30')}>
                         <td className="pl-4 pr-2 py-2.5">
+                          {ownBarcode ? (
+                            <div
+                              className={cn(ROW_FIELD, 'flex items-center font-mono text-xs text-gray-600')}
+                              title={t('An existing item’s barcode is changed in Items → Edit')}
+                            >
+                              <span className="truncate">{ownBarcode}</span>
+                            </div>
+                          ) : (
+                            <>
+                              <input
+                                aria-label={t('Barcode')}
+                                data-purchase-nav="true"
+                                data-barcode-input
+                                type="text"
+                                autoComplete="off"
+                                spellCheck={false}
+                                value={row.barcode}
+                                onChange={(e) => upsertRow(rowIndex, { barcode: e.target.value })}
+                                // Selected, so a scan replaces a code typed earlier.
+                                onFocus={(e) => e.target.select()}
+                                onKeyDown={(e) => {
+                                  if (e.key !== 'Enter') return;
+                                  e.preventDefault();
+                                  if (row.barcode.trim()) void applyBarcode(rowIndex, row.barcode);
+                                  else advanceFocus(e.currentTarget);
+                                }}
+                                onBlur={() => {
+                                  const tidy = normalizeBarcode(row.barcode);
+                                  if (tidy !== row.barcode) upsertRow(rowIndex, { barcode: tidy });
+                                }}
+                                placeholder={t('Scan')}
+                                title={t('Scan the pack, or type its barcode. Optional.')}
+                                className={cn(ROW_FIELD, 'font-mono text-xs', (barcodeIssue || takenBy) && 'border-red-300 text-red-600')}
+                              />
+                              {barcodeIssue ? (
+                                <p className="mt-1 text-[11px] font-semibold text-red-500">{t(barcodeIssue)}</p>
+                              ) : takenBy ? (
+                                <p className="mt-1 truncate text-[11px] font-semibold text-red-500" title={takenBy.name}>
+                                  {t('Already on {item}', { item: itemLabel(takenBy.name) })}
+                                </p>
+                              ) : (
+                                typedBarcode && (selected || isNew) && (
+                                  <p className="mt-1 truncate text-[11px] text-emerald-600">{t('Saved on this item')}</p>
+                                )
+                              )}
+                            </>
+                          )}
+                        </td>
+                        <td className="px-2 py-2.5">
                           <input
                             aria-label={t('Item')}
+                            data-barcode-input
                             ref={(element) => {
                               if (element) itemInputRefs.current.set(rowIndex, element);
                               else itemInputRefs.current.delete(rowIndex);
@@ -867,16 +1043,29 @@ export const Purchases = () => {
                               upsertRow(rowIndex, {
                                 item_query: e.target.value,
                                 item_id: 0,
+                                // The barcode came with the item being replaced.
+                                ...(selected?.barcode && normalizeBarcode(row.barcode) === selected.barcode ? { barcode: '' } : {}),
                               });
                               setActiveItemRow(rowIndex);
                             }}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
                                 e.preventDefault();
+                                const typed = row.item_query.trim();
+                                // A barcode scanned into the name box: a known one
+                                // fills the row; a new one moves to the barcode box.
+                                const scanned =
+                                  findByBarcode(items, typed) ||
+                                  (!row.item_id && looksLikeBarcode(typed) && !items.some((item) => item.name.toLowerCase() === typed.toLowerCase()));
+                                if (scanned) {
+                                  upsertRow(rowIndex, { item_query: '', item_id: 0 });
+                                  void applyBarcode(rowIndex, typed);
+                                  return;
+                                }
                                 const exactMatch = items.find(
                                   (item) =>
-                                    item.name.toLowerCase() === row.item_query.trim().toLowerCase() ||
-                                    item.hsn_code === row.item_query.trim()
+                                    item.name.toLowerCase() === typed.toLowerCase() ||
+                                    item.hsn_code === typed
                                 );
                                 const firstMatch = itemSuggestions[0];
 
@@ -985,6 +1174,7 @@ export const Purchases = () => {
                           <input
                             aria-label={t('Quantity')}
                             data-purchase-nav="true"
+                            data-qty-row={rowIndex}
                             type="number"
                             inputMode="decimal"
                             min="0"
@@ -1081,7 +1271,7 @@ export const Purchases = () => {
 
             <div className="grid gap-4 md:grid-cols-3">
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                <p className="text-xs font-bold text-gray-500 uppercase">{t('Subtotal')}</p>
+                <p className="text-xs font-bold text-gray-500 uppercase">{t('Subtotal')}<span className={HEADER_NOTE}>{t('before GST')}</span></p>
                 <p className="text-2xl font-black text-gray-900 mt-1">{t('Rs. {value}', { value: totals.subtotal.toFixed(2) })}</p>
               </div>
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
@@ -1089,7 +1279,7 @@ export const Purchases = () => {
                 <p className="text-2xl font-black text-amber-600 mt-1">{t('Rs. {value}', { value: totals.tax.toFixed(2) })}</p>
               </div>
               <div className="bg-orange-50 rounded-2xl p-4 border border-orange-100">
-                <p className="text-xs font-bold text-orange-600 uppercase">{t('Grand Total')}</p>
+                <p className="text-xs font-bold text-orange-600 uppercase">{t('Grand Total')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></p>
                 <p className="text-2xl font-black text-orange-700 mt-1">{t('Rs. {value}', { value: totals.total.toFixed(2) })}</p>
               </div>
             </div>
@@ -1099,9 +1289,11 @@ export const Purchases = () => {
                 <div>
                   <p className="text-sm font-bold text-gray-900">{t('Payment')}</p>
                   <p className="text-xs text-gray-500">
-                    {payment.mode === 'credit'
+                    {noSupplier
+                      ? t('No supplier, so it is paid in full now. To buy on credit, enter the supplier.')
+                      : paymentMode === 'credit'
                       ? t('Nothing paid yet — the full amount goes to Purchase Credit.')
-                      : payment.mode === 'full'
+                      : paymentMode === 'full'
                         ? t('Paid in full now — goes straight to Payments Done.')
                         : t('Rs. {value} will be owed and go to Purchase Credit.', { value: Math.max(0, round2(totals.total - (Number(payment.amount) || 0))).toFixed(2) })}
                   </p>
@@ -1112,9 +1304,11 @@ export const Purchases = () => {
                       key={mode}
                       type="button"
                       onClick={() => setPayment((current) => ({ ...current, mode }))}
+                      disabled={noSupplier && mode !== 'full'}
+                      title={noSupplier && mode !== 'full' ? t('Enter the supplier to buy on credit.') : undefined}
                       className={cn(
-                        'px-4 py-2 rounded-xl text-sm font-bold transition-all',
-                        payment.mode === mode ? 'bg-orange-600 text-white shadow' : 'text-gray-600 hover:bg-gray-50'
+                        'px-4 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent',
+                        paymentMode === mode ? 'bg-orange-600 text-white shadow' : 'text-gray-600 hover:bg-gray-50'
                       )}
                     >
                       {t(label)}
@@ -1123,9 +1317,9 @@ export const Purchases = () => {
                 </div>
               </div>
 
-              {payment.mode !== 'credit' && (
+              {paymentMode !== 'credit' && (
                 <div className="grid gap-4 md:grid-cols-3">
-                  {payment.mode === 'part' && (
+                  {paymentMode === 'part' && (
                     <label className="space-y-2">
                       <span className="text-sm font-semibold text-gray-700">{t('Paid now (Rs.)')}</span>
                       <input
@@ -1215,7 +1409,7 @@ export const Purchases = () => {
                 <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">{t('Invoice')}</th>
                 <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">{t('Created By')}</th>
                 <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">{t('Created At')}</th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-right">{t('Total')}</th>
+                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-right">{t('Total')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></th>
                 <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-right">{t('Payment')}</th>
               </tr>
             </thead>
@@ -1233,7 +1427,7 @@ export const Purchases = () => {
                   <tr key={purchase.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4 font-mono font-bold text-gray-900">{purchase.purchase_number}</td>
                     <td className="px-6 py-4">
-                      <p className="font-semibold text-gray-900">{purchase.supplier_name}</p>
+                      <p className="font-semibold text-gray-900">{supplierLabel(purchase.supplier_name)}</p>
                       <p className="text-xs text-gray-500">{purchase.supplier_gstin || t('No GSTIN')}</p>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">{purchase.invoice_number || 'N/A'}</td>

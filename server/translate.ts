@@ -20,7 +20,14 @@ import type Database from 'better-sqlite3';
  * TRANSLATE_ITEM_NAMES=off turns it off. TRANSLATE_API_BASE points it at a
  * stand-in, for the tests.
  *
- * Only item names are sent: no prices, customers or anything else.
+ * Customers' names (the person's and the bakery's) are written in Kannada
+ * letters too, so "Sri Ganesh Bakery" reads ಶ್ರೀ ಗಣೇಶ್ ಬೇಕರಿ: spelt out, not
+ * translated, because a name is a name. That uses Google's transliteration
+ * (Google Input Tools), and sends those names, and nothing else about the
+ * customer: no phone, address, GSTIN or balance. TRANSLATE_CUSTOMER_NAMES=off
+ * keeps customer names on this computer (they then show in English).
+ *
+ * Only these names are sent: no prices, bills or anything else.
  *
  * In items.name_kn, NULL means "not translated yet"; an admin can type a name
  * in by hand instead (see PUT /api/items/:id), and renaming an item clears an
@@ -28,6 +35,26 @@ import type Database from 'better-sqlite3';
  */
 
 export type Translator = (texts: string[]) => Promise<string[]>;
+
+const TRANSLITERATE_BASE = () => process.env.TRANSLATE_API_BASE || 'https://inputtools.google.com';
+
+const decodeEntities = (text: string) =>
+  text.replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+
+/** Names spelt in Kannada letters, one request per name, gently. */
+export const transliterator: Translator = async (texts) => {
+  const out: string[] = [];
+  for (const text of texts) {
+    const url = `${TRANSLITERATE_BASE()}/request?text=${encodeURIComponent(text)}&itc=kn-t-i0-und&num=1&cp=0&cs=1&ie=utf-8&oe=utf-8`;
+    const body = await getJson(url);
+    // ["SUCCESS", [["Sri Ganesh", ["ಶ್ರೀ ಗಣೇಶ್"], ...]]]
+    if (body?.[0] !== 'SUCCESS') throw new Error('Unexpected answer from Google Input Tools');
+    const first = body?.[1]?.[0]?.[1]?.[0];
+    out.push(typeof first === 'string' ? decodeEntities(first).trim() : '');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return out;
+};
 
 const FREE_BASE = () => process.env.TRANSLATE_API_BASE || 'https://translate.googleapis.com';
 const CLOUD_BASE = () => process.env.TRANSLATE_API_BASE || 'https://translation.googleapis.com';
@@ -73,6 +100,8 @@ export interface TranslationStatus {
   enabled: boolean;
   /** Items still waiting for a Kannada name. */
   pending: number;
+  /** Customers whose names are still to be written in Kannada. */
+  customers_pending: number;
   /** Why the last pass failed, if it did. Cleared by the next one that works. */
   last_error: string | null;
   last_run_at: string | null;
@@ -94,10 +123,19 @@ const MAX_BACKOFF_MS = 60 * 60_000;
 
 export const startItemNameTranslation = (
   db: Database.Database,
-  options: { translator?: Translator; enabled?: boolean; firstDelayMs?: number } = {}
+  options: { translator?: Translator; transliterate?: Translator; enabled?: boolean; customers?: boolean; firstDelayMs?: number } = {}
 ): ItemNameTranslation => {
   const enabled = options.enabled ?? process.env.TRANSLATE_ITEM_NAMES?.toLowerCase() !== 'off';
+  const customersToo = options.customers ?? process.env.TRANSLATE_CUSTOMER_NAMES?.toLowerCase() !== 'off';
   const translator = options.translator ?? defaultTranslator();
+  const spellInKannada = options.transliterate ?? transliterator;
+  const waitingCustomers = `(name_kn IS NULL AND trim(coalesce(name, '')) <> '')
+    OR (shop_name_kn IS NULL AND trim(coalesce(shop_name, '')) <> '')`;
+  const customersPending = db.prepare(`SELECT COUNT(*) AS n FROM customers WHERE ${waitingCustomers}`);
+  const nextCustomers = db.prepare(`SELECT id, name, shop_name, name_kn, shop_name_kn FROM customers WHERE ${waitingCustomers} ORDER BY id LIMIT ?`);
+  // As for items: only if the name is still the one sent, and still empty.
+  const saveCustomerName = db.prepare('UPDATE customers SET name_kn = ? WHERE id = ? AND name = ? AND name_kn IS NULL');
+  const saveShopName = db.prepare('UPDATE customers SET shop_name_kn = ? WHERE id = ? AND shop_name = ? AND shop_name_kn IS NULL');
   const pendingCount = db.prepare('SELECT COUNT(*) AS n FROM items WHERE name_kn IS NULL');
   const nextBatch = db.prepare('SELECT id, name FROM items WHERE name_kn IS NULL ORDER BY id LIMIT ?');
   // Only if the item still has that name and nobody has filled it in since.
@@ -127,6 +165,26 @@ export const startItemNameTranslation = (
         });
       })();
       if (rows.length < BATCH) break;
+    }
+
+    if (customersToo) {
+      for (;;) {
+        const rows = nextCustomers.all(BATCH) as Array<{ id: number; name: string | null; shop_name: string | null; name_kn: string | null; shop_name_kn: string | null }>;
+        if (!rows.length) break;
+        const wanted = [...new Set(rows.flatMap((row) => [
+          row.name_kn == null && row.name?.trim() ? row.name : null,
+          row.shop_name_kn == null && row.shop_name?.trim() ? row.shop_name : null,
+        ]).filter((text): text is string => Boolean(text)))];
+        const spelt = await spellInKannada(wanted);
+        const kannadaOf = new Map(wanted.map((text, index) => [text, (spelt[index] ?? '').slice(0, 200)]));
+        db.transaction(() => {
+          for (const row of rows) {
+            if (row.name_kn == null && row.name?.trim()) translated += saveCustomerName.run(kannadaOf.get(row.name) ?? '', row.id, row.name).changes;
+            if (row.shop_name_kn == null && row.shop_name?.trim()) translated += saveShopName.run(kannadaOf.get(row.shop_name) ?? '', row.id, row.shop_name).changes;
+          }
+        })();
+        if (rows.length < BATCH) break;
+      }
     }
     return { translated };
   };
@@ -170,6 +228,7 @@ export const startItemNameTranslation = (
     status: () => ({
       enabled,
       pending: (pendingCount.get() as { n: number }).n,
+      customers_pending: customersToo ? (customersPending.get() as { n: number }).n : 0,
       last_error: lastError,
       last_run_at: lastRunAt,
     }),

@@ -1,5 +1,5 @@
-# Update an installed Vyapara Billing to the version in this package.
-# Run through "Update Vyapara.bat" from the NEW package's folder.
+# Update an installed Vasavi Billing to the version in this package.
+# Run through "Update Vasavi.bat" from the NEW package's folder.
 #
 # Bills, customers, stock, accounts and settings are never touched: they live
 # in the data folder and the app's .env, which are carried over. The database
@@ -16,23 +16,23 @@ param(
 Assert-Package -Quiet:$Quiet
 if (Invoke-Elevated $PSCommandPath $PSBoundParameters) { return }
 if (-not $InstallDir) { $InstallDir = $DefaultInstallDir }
-if (-not $LogFile) { $LogFile = Join-Path $env:TEMP 'VyaparaBilling-update.log' }
+if (-not $LogFile) { $LogFile = Join-Path $env:TEMP 'VasaviBilling-update.log' }
 Start-Transcript -Path $LogFile -Force | Out-Null
 
 $exitCode = 0
 $movedAside = $false
 try {
   $info = Get-InstallInfo $InstallDir
-  if (-not $info) { throw "Vyapara Billing is not installed in $InstallDir. Use 'Install Vyapara.bat' first." }
+  if (-not $info) { throw "Vasavi Billing is not installed in $InstallDir. Use 'Install Vasavi.bat' first." }
   if ((Resolve-Path $PackageRoot).Path -eq (Resolve-Path $InstallDir).Path) {
-    throw 'Run Update Vyapara.bat from the folder of the NEW version you downloaded, not from the installed copy.'
+    throw 'Run Update Vasavi.bat from the folder of the NEW version you downloaded, not from the installed copy.'
   }
   $newVersion = Get-PackageVersion $PackageRoot
   $serviceName = $info.serviceName
   $serviceExe = Get-ServiceExe $InstallDir $serviceName
   $port = [int]$info.port
   Write-Host ''
-  Write-Host "  Vyapara Billing update: $($info.version) -> $newVersion" -ForegroundColor White
+  Write-Host "  Vasavi Billing update: $($info.version) -> $newVersion" -ForegroundColor White
   Write-Host '  ------------------------------------------'
 
   if (-not $Quiet) {
@@ -71,7 +71,7 @@ try {
   Copy-Item (Join-Path $InstallDir 'app.previous\.env') (Join-Path $InstallDir 'app\.env') -Force
   Protect-File (Join-Path $InstallDir 'app\.env')
   Copy-Item (Join-Path $PackageRoot 'service\VyaparaBilling.exe') $serviceExe -Force
-  foreach ($file in @('Update Vyapara.bat', 'Uninstall Vyapara.bat', 'README.txt')) {
+  foreach ($file in @('Update Vasavi.bat', 'Uninstall Vasavi.bat', 'README.txt')) {
     Copy-Item (Join-Path $PackageRoot $file) (Join-Path $InstallDir $file) -Force
   }
   Write-Ok "Version $newVersion copied"
@@ -90,6 +90,15 @@ try {
   Save-InstallInfo $InstallDir $info
   $key = Join-Path $UninstallKeyRoot $serviceName
   if (Test-Path $key) { Set-ItemProperty $key DisplayVersion $newVersion }
+
+  # Installed as Vyapara Billing: the icons, the Apps list and the service take
+  # the new name. Cosmetic, so a problem here does not undo the update.
+  try {
+    Update-AppName $InstallDir $serviceName $port
+    Write-Ok "Shown as '$(Get-AppLabel $serviceName)'"
+  } catch {
+    Write-Note "The new name could not be applied everywhere: $($_.Exception.Message)"
+  }
 
   Write-Host ''
   Write-Host "  Updated to $newVersion. All shop data is as it was." -ForegroundColor Green

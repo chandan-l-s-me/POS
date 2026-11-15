@@ -30,6 +30,7 @@ export const SERVER_MESSAGES = [
   'Too many failed attempts. Try again in {minutes} minute(s).',
   'Too many failed sign-in attempts. Try again in {minutes} minute(s).',
   'This account still uses the demo password, so it cannot be used remotely. Sign in at the shop counter and change the password in Settings first.',
+  'Admin accounts can be used only on the shop computer. Sign in there.',
   'Account not found',
   'Admin account not found',
   'Cashier not found',
@@ -59,6 +60,8 @@ export const SERVER_MESSAGES = [
   'Already printed',
   'Print job not found',
   '{bill} put ₹{amount} on credit, but the customer now owes only ₹{owed} — they have already paid some of it. Record the refund as a balance correction on the customer first, then delete the bill.',
+  '{bill} put ₹{amount} on credit, but the customer now owes only ₹{owed} — they have already paid some of it. Record the refund as a balance correction on the customer first, then edit the bill.',
+  'The credit on {bill} is not in the customer’s ledger, so its credit cannot be changed here. Correct the customer’s balance instead.',
 
   // Customers and credit.
   'A customer with this phone number already exists',
@@ -80,6 +83,27 @@ export const SERVER_MESSAGES = [
   'This batch is sold out, so there is nothing left to reprice',
   'This item appears on existing bills or purchases and cannot be deleted. Adjust its stock to 0 instead.',
 
+  'This admin account is set in the .env file (REMOTE_ADMIN_USERNAME and REMOTE_ADMIN_PASSWORD). Change or remove it there, then restart the app.',
+
+  // Barcodes.
+  'Barcode {code} is already on {item}.',
+  '{item} already has the barcode {code}. Change it in Items.',
+  'No item has the barcode {code}',
+  'A barcode must be 4 to 48 characters long',
+  'A barcode can have only English letters, numbers and symbols',
+  'Excel has shortened this barcode. Format the column as Text, type the barcode again and save.',
+
+  // Bulk prices.
+  'Send the bulk prices as a list',
+  'At most {max} bulk prices per item',
+  'A bulk price must be for more than 1',
+  'Each bulk price needs a different quantity',
+  'A bigger quantity cannot have a higher bulk price',
+
+  // Importing items with their opening stock.
+  'At most {max} items can be imported at once. Split the list into parts.',
+  'There are no items to import.',
+
   // Purchases and suppliers.
   '"{item}" is already an item. Pick it from the list instead of adding it again.',
   '"{item}" is on this purchase twice as a new item. Enter it once, or pick it on the second line.',
@@ -91,6 +115,9 @@ export const SERVER_MESSAGES = [
   'SGST + CGST cannot exceed 100%',
   'Total GST rate on a purchase line cannot exceed 100%',
   'Amount paid (₹{paid}) is more than the purchase total (₹{total})',
+  'A purchase without a supplier must be paid in full. To buy on credit, enter the supplier.',
+  'Enter the supplier name to save their phone, GSTIN or address.',
+  'This was paid when a purchase without a supplier was saved, so it cannot be removed.',
   'A supplier with this name already exists',
   'Another supplier already uses this name',
   'Supplier not found',

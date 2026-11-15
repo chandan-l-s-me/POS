@@ -9,8 +9,12 @@ import {
   ChevronRight, 
   Download,
   Trash2,
-  X
+  X,
+  Pencil,
+  FileText
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { openBillForEditing } from '../lib/cartActions';
 import { DateFilterButton, DateFilterPanel } from '../components/DateFilter';
 import { PurchaseHistory } from '../components/PurchaseHistory';
 import { SalesPurchaseSwitch, useTradeView } from '../components/SalesPurchaseSwitch';
@@ -20,8 +24,9 @@ import { usePrint } from '../hooks/usePrint';
 import { Receipt } from '../components/Receipt';
 import { cn, formatDateTimeInIST, getISTTimestampForFileName } from '../lib/utils';
 import { billCustomerContactName, billCustomerDisplayName } from '../lib/customer';
-import { paymentLabel, t, unitLabel, withEnglish } from '../i18n';
-import { ItemName } from '../components/ItemName';
+import { localName, paymentLabel, t, unitLabel, withEnglish } from '../i18n';
+import { HEADER_NOTE } from '../lib/entryStyles';
+import { ItemName, LocalName } from '../components/ItemName';
 
 // Cap on how many bills one screen loads. Narrow the date range to look
 // further back rather than raising this.
@@ -83,6 +88,11 @@ const SalesHistory = () => {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // The invoice opens on top of the details, from its button.
+  const [showInvoice, setShowInvoice] = useState(false);
+  const [openingEdit, setOpeningEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const navigate = useNavigate();
   // Bumped after a delete so the list is fetched again.
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -188,9 +198,10 @@ const SalesHistory = () => {
       'Contact Person',
       'Cashier',
       'Payment Method',
-      'Tax Amount',
+      'Taxable Value (before GST)',
+      'GST Amount',
       'Discount Amount',
-      'Total Amount',
+      'Total Amount (incl. GST)',
     ];
 
     // The file reads the same in either language.
@@ -201,6 +212,8 @@ const SalesHistory = () => {
       billCustomerContactName(bill) || '',
       bill.cashier_name,
       bill.payment_method,
+      subtotalOf(bill).toFixed(2),
+      subtotalOf(bill).toFixed(2),
       bill.tax_amount.toFixed(2),
       bill.discount_amount.toFixed(2),
       bill.total_amount.toFixed(2),
@@ -235,7 +248,24 @@ const SalesHistory = () => {
     }
   };
 
+  /** Open the bill in a Billing tab to change it; saving there replaces it. */
+  const handleEditBill = async () => {
+    if (!selectedBill) return;
+    setOpeningEdit(true);
+    setEditError(null);
+    try {
+      await openBillForEditing(selectedBill);
+      navigate('/billing');
+    } catch (err: any) {
+      setEditError(err?.message || t('Could not open the bill for editing.'));
+    } finally {
+      setOpeningEdit(false);
+    }
+  };
+
   const closeBillModal = () => {
+    setShowInvoice(false);
+    setEditError(null);
     setShowBillModal(false);
     setConfirmingDelete(false);
     setDeleteError(null);
@@ -307,7 +337,7 @@ const SalesHistory = () => {
               <th className="px-8 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">{t('Customer')}</th>
               <th className="px-8 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">{t('Cashier')}</th>
               <th className="px-8 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">{t('Method')}</th>
-              <th className="px-8 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">{t('Amount')}</th>
+              <th className="px-8 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">{t('Amount')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></th>
               <th className="px-8 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider text-right">{t('Actions')}</th>
             </tr>
           </thead>
@@ -330,9 +360,9 @@ const SalesHistory = () => {
                     {formatDateTimeInIST(bill.created_at)}
                   </td>
                   <td className="px-8 py-4">
-                    <p className="font-bold text-gray-900">{billCustomerDisplayName(bill)}</p>
+                    <p className="font-bold text-gray-900"><LocalName name={billCustomerDisplayName(bill)} /></p>
                     {billCustomerContactName(bill) && (
-                      <p className="text-xs text-gray-500">{billCustomerContactName(bill)}</p>
+                      <p className="text-xs text-gray-500">{localName(billCustomerContactName(bill))}</p>
                     )}
                   </td>
                   <td className="px-8 py-4 text-sm text-gray-500">{bill.cashier_name}</td>
@@ -391,26 +421,30 @@ const SalesHistory = () => {
         </div>
       </div>
 
-      {/* Bill Detail Modal */}
+      {/* Bill Detail Modal: the bill's details. The invoice opens from a
+          button, on top; printing works whether it is open or not. */}
       <AnimatePresence>
         {showBillModal && selectedBill && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/20 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className={cn(
-                "bg-white w-full rounded-3xl shadow-2xl h-[88vh] lg:h-[80vh] overflow-y-auto lg:overflow-hidden",
-                settings.bill_format === 'standard'
-                  ? "max-w-6xl flex flex-col"
-                  : "max-w-5xl flex flex-col lg:flex-row"
-              )}
+              className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl max-h-[90vh] flex flex-col overflow-hidden"
             >
-              <div className="flex-1 p-4 sm:p-8 lg:overflow-auto">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="font-bold text-2xl">{t('Bill Details')}</h3>
-                  <div className="flex items-center gap-2">
-                    {isAdmin && !confirmingDelete && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-8">
+                <h3 className="font-bold text-2xl">{t('Bill Details')}</h3>
+                <div className="flex flex-wrap items-center gap-2">
+                  {isAdmin && !confirmingDelete && (
+                    <>
+                      <button
+                        onClick={() => void handleEditBill()}
+                        disabled={openingEdit}
+                        className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-orange-700 border border-orange-200 rounded-2xl hover:bg-orange-50 transition-all disabled:opacity-50"
+                      >
+                        <Pencil size={16} />
+                        {openingEdit ? t('Opening…') : t('Edit Bill')}
+                      </button>
                       <button
                         onClick={() => { setConfirmingDelete(true); setDeleteError(null); }}
                         className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-red-600 border border-red-200 rounded-2xl hover:bg-red-50 transition-all"
@@ -418,13 +452,18 @@ const SalesHistory = () => {
                         <Trash2 size={16} />
                         {t('Delete Bill')}
                       </button>
-                    )}
-                    <button onClick={closeBillModal} className="p-2 hover:bg-gray-100 rounded-full">
-                      <X size={24} />
-                    </button>
-                  </div>
+                    </>
+                  )}
+                  <button onClick={closeBillModal} className="p-2 hover:bg-gray-100 rounded-full" aria-label={t('Close')}>
+                    <X size={24} />
+                  </button>
                 </div>
+              </div>
 
+              <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-8">
+                {editError && (
+                  <p className="mb-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{editError}</p>
+                )}
                 {confirmingDelete && (
                   <div className="mb-8 rounded-2xl border border-red-200 bg-red-50 p-5">
                     <p className="font-bold text-red-700">{t('Delete bill {bill_number}?', { bill_number: selectedBill.bill_number })}</p>
@@ -432,7 +471,7 @@ const SalesHistory = () => {
                       <li>{t('Every item on it goes back into stock.')}</li>
                       {selectedBill.credit_amount > 0 && (
                         <li>
-                          ₹{t('{value} comes off {selectedBill}’s credit balance.', { value: selectedBill.credit_amount.toFixed(2), selectedBill: billCustomerDisplayName(selectedBill) })}
+                          ₹{t('{value} comes off {selectedBill}’s credit balance.', { value: selectedBill.credit_amount.toFixed(2), selectedBill: localName(billCustomerDisplayName(selectedBill)) })}
                         </li>
                       )}
                       <li>{t('It is removed from history, the customer’s passbook, reports and the dashboard. This cannot be undone.')}</li>
@@ -465,12 +504,17 @@ const SalesHistory = () => {
                     <p className="text-xs font-bold text-gray-400 uppercase mb-1">{t('Bill Info')}</p>
                     <p className="font-bold text-lg">{selectedBill.bill_number}</p>
                     <p className="text-sm text-gray-500">{formatDateTimeInIST(selectedBill.created_at)}</p>
+                    {selectedBill.edited_at && (
+                      <p className="mt-1 inline-block rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
+                        {t('Edited {when} by {name}', { when: formatDateTimeInIST(selectedBill.edited_at), name: selectedBill.edited_by || '—' })}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <p className="text-xs font-bold text-gray-400 uppercase mb-1">{t('Customer')}</p>
-                    <p className="font-bold text-lg">{billCustomerDisplayName(selectedBill)}</p>
+                    <p className="font-bold text-lg"><LocalName name={billCustomerDisplayName(selectedBill)} /></p>
                     {billCustomerContactName(selectedBill) && (
-                      <p className="text-sm text-gray-500">{billCustomerContactName(selectedBill)}</p>
+                      <p className="text-sm text-gray-500">{localName(billCustomerContactName(selectedBill))}</p>
                     )}
                     <p className="text-sm text-gray-500">{selectedBill.customer_phone || 'N/A'}</p>
                   </div>
@@ -488,90 +532,120 @@ const SalesHistory = () => {
                   </div>
                 </div>
 
-                <table className="w-full text-left mb-8">
-                  <thead>
-                    <tr className="border-b border-gray-100">
-                      <th className="py-3 text-xs font-bold text-gray-400 uppercase">{t('Item')}</th>
-                      <th className="py-3 text-xs font-bold text-gray-400 uppercase text-center">{t('Qty')}</th>
-                      <th className="py-3 text-xs font-bold text-gray-400 uppercase text-right">{t('Price')}</th>
-                      <th className="py-3 text-xs font-bold text-gray-400 uppercase text-right">{t('Total')}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {selectedBill.items?.map(item => (
-                      <tr key={item.id}>
-                        <td className="py-4">
-                          <p className="font-bold text-gray-900"><ItemName name={item.item_name} /></p>
-                          <p className="text-xs text-gray-400">{t('HSN: {hsn_code}', { hsn_code: item.hsn_code })}</p>
-                        </td>
-                        <td className="py-4 text-center font-semibold">{item.quantity} {unitLabel(item.metric)}</td>
-                        <td className="py-4 text-right">₹{item.price.toFixed(2)}</td>
-                        <td className="py-4 text-right font-bold">₹{item.total_amount.toFixed(2)}</td>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left mb-8">
+                    <thead>
+                      <tr className="border-b border-gray-100">
+                        <th className="py-3 text-xs font-bold text-gray-400 uppercase">{t('Item')}</th>
+                        <th className="py-3 text-xs font-bold text-gray-400 uppercase text-center">{t('Qty')}</th>
+                        <th className="py-3 text-xs font-bold text-gray-400 uppercase text-right">{t('Price')}<span className={HEADER_NOTE}>{t('before GST')}</span></th>
+                        <th className="py-3 text-xs font-bold text-gray-400 uppercase text-right">{t('GST')}</th>
+                        <th className="py-3 text-xs font-bold text-gray-400 uppercase text-right">{t('Total')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {selectedBill.items?.map(item => (
+                        <tr key={item.id}>
+                          <td className="py-4 pr-3">
+                            <p className="font-bold text-gray-900"><ItemName name={item.item_name} /></p>
+                            <p className="text-xs text-gray-400">{t('HSN: {hsn_code}', { hsn_code: item.hsn_code })}</p>
+                          </td>
+                          <td className="py-4 text-center font-semibold whitespace-nowrap">{item.quantity} {unitLabel(item.metric)}</td>
+                          <td className="py-4 text-right">₹{item.price.toFixed(2)}</td>
+                          <td className="py-4 text-right text-sm text-gray-600 whitespace-nowrap">
+                            ₹{(item.sgst_amount + item.cgst_amount + (item.igst_amount || 0)).toFixed(2)}
+                          </td>
+                          <td className="py-4 text-right font-bold">₹{item.total_amount.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
 
                 <div className="flex justify-end">
-                  <div className="w-64 space-y-3">
+                  <div className="w-full sm:w-80 space-y-3">
                     <div className="flex justify-between text-gray-500">
-                      <span>{t('Subtotal')}</span>
+                      <span>{t('Subtotal (before GST)')}</span>
                       <span className="font-bold text-gray-900">₹{subtotalOf(selectedBill).toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-gray-500">
-                      <span>{t('Tax')}</span>
+                      <span>{t('GST')}</span>
                       <span className="font-bold text-gray-900">₹{selectedBill.tax_amount.toFixed(2)}</span>
                     </div>
-                    <div className="flex justify-between text-red-500">
-                      <span>{t('Discount')}</span>
-                      <span className="font-bold">-₹{selectedBill.discount_amount.toFixed(2)}</span>
-                    </div>
+                    {selectedBill.discount_amount > 0 && (
+                      <div className="flex justify-between text-red-500">
+                        <span>{t('Discount')}</span>
+                        <span className="font-bold">-₹{selectedBill.discount_amount.toFixed(2)}</span>
+                      </div>
+                    )}
+                    {(() => {
+                      const roundOff = Math.round((selectedBill.total_amount - (subtotalOf(selectedBill) + selectedBill.tax_amount - selectedBill.discount_amount)) * 100) / 100;
+                      return roundOff !== 0 && Math.abs(roundOff) < 1 ? (
+                        <div className="flex justify-between text-gray-500">
+                          <span>{t('Round off')}</span>
+                          <span className="font-bold text-gray-900">{roundOff < 0 ? '-' : ''}₹{Math.abs(roundOff).toFixed(2)}</span>
+                        </div>
+                      ) : null;
+                    })()}
                     <div className="pt-3 border-t border-gray-100 flex justify-between items-end">
-                      <span className="font-bold text-gray-900">{t('Grand Total')}</span>
+                      <span className="font-bold text-gray-900">{t('Grand Total (incl. GST)')}</span>
                       <span className="text-2xl font-black text-orange-600">₹{selectedBill.total_amount.toFixed(2)}</span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Thermal preview panel is sized for a real 80mm receipt (302px);
-                  it used to be w-80/p-8 which left only 255px and clipped the
-                  right edge of every reprint preview. */}
-              {settings.bill_format === 'standard' ? (
-                <div className="border-t border-gray-100 bg-gray-50 p-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h4 className="font-bold text-lg text-gray-900">{t('Invoice Preview')}</h4>
-                    <button
-                      onClick={onPrintClick}
-                      className="py-3 px-5 bg-orange-600 text-white font-bold rounded-2xl shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all flex items-center justify-center gap-2"
-                    >
-                      <Printer size={18} />
-                      {t('Reprint Receipt')}
-                    </button>
-                  </div>
-                  <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 overflow-auto max-h-[38vh]">
-                    <div ref={receiptRef}>
-                      <Receipt billId={selectedBill.id} />
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="w-full lg:w-[26rem] shrink-0 bg-gray-50 border-t lg:border-t-0 lg:border-l border-gray-100 p-4 sm:p-6 flex flex-col gap-4 lg:overflow-y-auto">
-                  <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 overflow-x-auto">
-                    <div ref={receiptRef}>
-                      <Receipt billId={selectedBill.id} />
-                    </div>
-                  </div>
-                  <button
-                    onClick={onPrintClick}
-                    className="w-full py-4 bg-orange-600 text-white font-bold rounded-2xl shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all flex items-center justify-center gap-2"
-                  >
-                    <Printer size={20} />
-                    {t('Reprint Receipt')}
-                  </button>
-                </div>
-              )}
+              <div className="flex flex-wrap justify-end gap-3 border-t border-gray-100 bg-gray-50 px-4 py-4 sm:px-8">
+                <button
+                  onClick={() => setShowInvoice(true)}
+                  className="flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-5 py-3 font-bold text-gray-700 transition-all hover:bg-gray-100"
+                >
+                  <FileText size={18} />
+                  {t('Invoice Preview')}
+                </button>
+                <button
+                  onClick={onPrintClick}
+                  className="flex items-center justify-center gap-2 rounded-2xl bg-orange-600 px-5 py-3 font-bold text-white shadow-lg shadow-orange-100 transition-all hover:bg-orange-700"
+                >
+                  <Printer size={18} />
+                  {t('Reprint Receipt')}
+                </button>
+              </div>
             </motion.div>
+
+            {/* What prints: always here, off screen, so Reprint works without the preview open. */}
+            <div style={{ position: 'absolute', left: '-9999px', top: 0, visibility: 'hidden' }} aria-hidden>
+              <div ref={receiptRef}>
+                <Receipt billId={selectedBill.id} />
+              </div>
+            </div>
+
+            {showInvoice && (
+              <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4 sm:p-6" role="dialog" aria-label={t('Invoice Preview')}>
+                <div className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+                  <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-6 py-4">
+                    <h4 className="text-lg font-bold text-gray-900">{t('Invoice Preview')} · {selectedBill.bill_number}</h4>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={onPrintClick}
+                        className="flex items-center gap-2 rounded-2xl bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-700"
+                      >
+                        <Printer size={16} />
+                        {t('Reprint Receipt')}
+                      </button>
+                      <button onClick={() => setShowInvoice(false)} className="rounded-full p-2 hover:bg-gray-100" aria-label={t('Close invoice preview')}>
+                        <X size={22} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-auto bg-gray-50 p-4 sm:p-6">
+                    <div className="mx-auto w-fit rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+                      <Receipt billId={selectedBill.id} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </AnimatePresence>

@@ -83,7 +83,7 @@ export const SalesCredit = () => {
   const overSixty = round2(ageing.d61_90 + ageing.d90_plus);
 
   const handleExport = () => {
-    const header = ['Customer', 'Contact', 'Phone', 'Bill No.', 'Date', 'Credit Given', 'Still Owed', 'Days Unpaid', 'Customer Balance'];
+    const header = ['Customer', 'Contact', 'Phone', 'Bill No.', 'Date', 'Credit Given (incl. GST)', 'Still Owed (incl. GST)', 'Days Unpaid', 'Customer Balance (incl. GST)'];
     const rows = customers.flatMap((customer) =>
       customer.unpaid.map((line) => [
         customer.display_name, customer.shop_name ? customer.name : '', customer.phone, lineLabel(line),

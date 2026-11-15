@@ -41,6 +41,13 @@ interface DataState {
   setItems: (items: Item[]) => void;
   /** Reload the shared catalogue cache. The only supported way to refresh it. */
   refreshItems: () => Promise<void>;
+  /**
+   * The server's change number the cache is up to (GET /api/items/changes);
+   * null until the first load.
+   */
+  itemsSeq: number | null;
+  /** Merge items changed elsewhere into the cache. See src/hooks/useLiveCatalogue.ts. */
+  applyItemChanges: (changes: { seq: number; items: Item[]; deleted: number[] }) => void;
   setCustomers: (customers: Customer[]) => void;
   setSettings: (settings: ShopSettings) => void;
   addItem: (item: Item) => void;
@@ -60,6 +67,7 @@ export const useDataStore = create<DataState>((set) => ({
   itemsComplete: true,
   setItemsComplete: (itemsComplete) => set({ itemsComplete }),
   setItems: (items) => set({ items }),
+  itemsSeq: null,
   refreshItems: async () => {
     const res = await api.getItemsPage({ limit: ITEM_CACHE_LIMIT });
     const rows: Item[] = res?.data ?? [];
@@ -68,8 +76,24 @@ export const useDataStore = create<DataState>((set) => ({
       // False when the shop has more items than the cache holds, which is the
       // signal for the billing screen to search the server instead.
       itemsComplete: (res?.total ?? rows.length) <= rows.length,
+      itemsSeq: typeof res?.seq === 'number' ? res.seq : null,
     });
   },
+  applyItemChanges: ({ seq, items: changed, deleted }) =>
+    set((state) => {
+      const byId = new Map(state.items.map((item) => [item.id, item]));
+      let itemsComplete = state.itemsComplete;
+      for (const id of deleted) byId.delete(id);
+      for (const item of changed) {
+        // An item the cache holds is replaced; a new one joins while there is
+        // room. Past the limit, search goes to the server instead.
+        if (byId.has(item.id) || byId.size < ITEM_CACHE_LIMIT) byId.set(item.id, item);
+        else itemsComplete = false;
+      }
+      // The server lists by name; keep that order.
+      const items = [...byId.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      return { items, itemsComplete, itemsSeq: seq };
+    }),
   setCustomers: (customers) => set({ customers }),
   setSettings: (settings) => set({ settings }),
   addItem: (item) => set((state) => ({ items: [...state.items, item] })),

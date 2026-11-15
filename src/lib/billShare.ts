@@ -29,10 +29,18 @@ export const billShareText = (bill: Bill, settings: ShopSettings, balanceDue?: n
   lines.push('');
 
   if (bill.tax_amount > 0) {
-    lines.push(`Subtotal: ${rupees(bill.subtotal_amount)}`);
+    lines.push(`Subtotal (before GST): ${rupees(bill.subtotal_amount)}`);
     lines.push(`GST: ${rupees(bill.tax_amount)}`);
   }
-  lines.push(`*Total: ${rupees(bill.total_amount)}*`);
+  // The discount and the paise the total drops, so the total adds up.
+  const discount = bill.discount_amount || 0;
+  if (discount > 0) lines.push(`Discount: -${rupees(discount)}`);
+  const roundOff = Math.round((bill.total_amount - (bill.subtotal_amount + bill.tax_amount - discount)) * 100) / 100;
+  // Never more than a rupee; anything else is an old bill without a subtotal.
+  if (roundOff !== 0 && Math.abs(roundOff) < 1 && (discount > 0 || bill.tax_amount > 0)) {
+    lines.push(`Round off: ${roundOff < 0 ? '-' : ''}${rupees(Math.abs(roundOff))}`);
+  }
+  lines.push(`*Total (incl. GST): ${rupees(bill.total_amount)}*`);
 
   const paid: string[] = [];
   if (bill.cash_amount > 0) paid.push(`Cash ${rupees(bill.cash_amount)}`);

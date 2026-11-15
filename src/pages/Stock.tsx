@@ -8,7 +8,11 @@ import { useDataStore } from '../store/useDataStore';
 import { formatRupees } from '../lib/supplierPayments';
 import { cn, formatDateInIST, getISTTimestampForFileName } from '../lib/utils';
 import { t, tn, unitLabel, withEnglish } from '../i18n';
+import { HEADER_NOTE } from '../lib/entryStyles';
 import { ItemName } from '../components/ItemName';
+import { searchList } from '../lib/fuzzy';
+import { ITEM_SEARCH } from '../lib/searchFields';
+import { gstScopeFilePart, GstScopeSwitch, inMyGst, matchesGstScope, type GstScope } from '../components/GstScopeSwitch';
 
 type Filter = 'all' | StockStatus;
 type Sort = 'name' | 'quantity' | 'days_left' | 'value';
@@ -46,6 +50,7 @@ export const Stock = () => {
   const [sort, setSort] = useState<Sort>('name');
   const [search, setSearch] = useState('');
   const [openItem, setOpenItem] = useState<StockRow | null>(null);
+  const [gstScope, setGstScope] = useState<GstScope>('all');
 
   const load = useCallback(() => {
     setLoading(true);
@@ -63,12 +68,27 @@ export const Stock = () => {
 
   useEffect(load, [load]);
 
+  // The items in the chosen "Include in my GST" view, before the status filter.
+  const scoped = useMemo(() => items.filter((item) => matchesGstScope(gstScope, item)), [items, gstScope]);
+  // The cards and tabs follow the view: worked out here from its items (the
+  // server's figures are for all of them).
+  const shownSummary = useMemo<StockSummary | null>(() => {
+    if (!summary || gstScope === 'all') return summary;
+    const count = (status: StockStatus) => scoped.filter((item) => item.status === status).length;
+    const total = (pick: (item: StockRow) => number) => Math.round(scoped.reduce((acc, item) => acc + pick(item), 0) * 100) / 100;
+    return {
+      item_count: scoped.length,
+      in_stock: count('in'),
+      low_stock: count('low'),
+      out_of_stock: count('out'),
+      value_at_price: total((item) => item.value_at_price),
+      ...(summary.value_at_cost != null ? { value_at_cost: total((item) => item.value_at_cost ?? 0) } : {}),
+    };
+  }, [summary, scoped, gstScope]);
+
   const visible = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    const rows = items.filter((item) =>
-      (filter === 'all' || item.status === filter) &&
-      (!query || item.name.toLowerCase().includes(query) || (item.hsn_code || '').toLowerCase().includes(query))
-    );
+    // Forgives a slip in a name when nothing contains the text.
+    const rows = searchList(scoped.filter((item) => filter === 'all' || item.status === filter), search, ITEM_SEARCH);
     const byName = (a: StockRow, b: StockRow) => a.name.localeCompare(b.name);
     const sorters: Record<Sort, (a: StockRow, b: StockRow) => number> = {
       name: byName,
@@ -81,13 +101,13 @@ export const Stock = () => {
       value: (a, b) => b.value_at_price - a.value_at_price || byName(a, b),
     };
     return [...rows].sort(sorters[sort]);
-  }, [items, filter, search, sort]);
+  }, [scoped, filter, search, sort]);
 
   const handleExport = () => {
     const header = [
-      'Item', 'HSN', 'Unit', 'Status', 'In Stock', 'Sells At', 'Value at Selling Price',
-      ...(isAdmin ? ['Value at Cost'] : []),
-      `Sold (last ${windowDays} days)`, 'Days Left', 'Last Purchased', 'Last Sold',
+      'Item', 'HSN', 'Unit', 'Status', 'In Stock', 'Selling Price (incl. GST)', 'Value at Selling Price (incl. GST)',
+      ...(isAdmin ? ['Value at Cost (before GST)'] : []),
+      `Sold (last ${windowDays} days)`, 'Days Left', 'Last Purchased', 'Last Sold', 'In My GST',
     ];
     const rows = visible.map((item) => [
       item.name, item.hsn_code, item.metric, STATUS[item.status].label, item.stock_quantity, item.price.toFixed(2),
@@ -95,34 +115,35 @@ export const Stock = () => {
       item.sold_recent, item.days_left ?? '',
       item.last_purchased_at ? formatDateInIST(item.last_purchased_at) : '',
       item.last_sold_at ? formatDateInIST(item.last_sold_at) : '',
+      inMyGst(item) ? 'Yes' : 'No',
     ]);
     const csv = [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a');
     link.href = url;
-    link.download = `stock-${filter}-${getISTTimestampForFileName()}.csv`;
+    link.download = `stock-${gstScopeFilePart(gstScope)}${filter}-${getISTTimestampForFileName()}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
-  const cards: Array<{ filter: Filter; label: string; value: string; note: string; icon: React.ElementType; tone: string }> = summary ? [
+  const cards: Array<{ filter: Filter; label: string; value: string; note: string; icon: React.ElementType; tone: string }> = shownSummary ? [
     {
-      filter: 'in', label: t('In stock'), value: qty(summary.in_stock), icon: PackageCheck, tone: 'emerald',
-      note: t('of {count} items', { count: qty(summary.item_count) }),
+      filter: 'in', label: t('In stock'), value: qty(shownSummary.in_stock), icon: PackageCheck, tone: 'emerald',
+      note: t('of {count} items', { count: qty(shownSummary.item_count) }),
     },
     {
-      filter: 'low', label: t('Low stock'), value: qty(summary.low_stock), icon: AlertTriangle, tone: 'amber',
+      filter: 'low', label: t('Low stock'), value: qty(shownSummary.low_stock), icon: AlertTriangle, tone: 'amber',
       note: t('{count} or fewer left', { count: qty(threshold) }),
     },
     {
-      filter: 'out', label: t('Out of stock'), value: qty(summary.out_of_stock), icon: PackageX, tone: 'red',
+      filter: 'out', label: t('Out of stock'), value: qty(shownSummary.out_of_stock), icon: PackageX, tone: 'red',
       note: t('nothing left to sell'),
     },
     {
-      filter: 'all', label: t('Stock value'), value: formatRupees(summary.value_at_price), icon: Boxes, tone: 'sky',
-      note: isAdmin && summary.value_at_cost != null ? t('at selling price; {cost} at cost', { cost: formatRupees(summary.value_at_cost) }) : t('at selling price'),
+      filter: 'all', label: t('Stock value'), value: formatRupees(shownSummary.value_at_price), icon: Boxes, tone: 'sky',
+      note: isAdmin && shownSummary.value_at_cost != null ? t('at selling price incl. GST; {cost} at cost before GST', { cost: formatRupees(shownSummary.value_at_cost) }) : t('at selling price incl. GST'),
     },
   ] : [];
 
@@ -134,17 +155,21 @@ export const Stock = () => {
   };
 
   const tabs: Array<{ value: Filter; label: string; count?: number }> = [
-    { value: 'all', label: t('All items'), count: summary?.item_count },
-    { value: 'in', label: t('In stock'), count: summary?.in_stock },
-    { value: 'low', label: t('Low stock'), count: summary?.low_stock },
-    { value: 'out', label: t('Out of stock'), count: summary?.out_of_stock },
+    { value: 'all', label: t('All items'), count: shownSummary?.item_count },
+    { value: 'in', label: t('In stock'), count: shownSummary?.in_stock },
+    { value: 'low', label: t('Low stock'), count: shownSummary?.low_stock },
+    { value: 'out', label: t('Out of stock'), count: shownSummary?.out_of_stock },
   ];
 
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-6 2xl:px-8 py-6 border-b border-gray-100 bg-gradient-to-r from-emerald-50 to-sky-50">
-          <h1 className="text-2xl font-bold text-gray-900">{t('Stock')}</h1>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <h1 className="text-2xl font-bold text-gray-900">{t('Stock')}</h1>
+            {/* Items ticked "Include in my GST" in Items, or the rest. */}
+            <GstScopeSwitch value={gstScope} onChange={setGstScope} className="bg-white/70" />
+          </div>
           <p className="text-sm text-gray-600 mt-1">
             {t('Everything on the shelf. Low stock is {threshold} or fewer left. “Lasts” is how long the stock will last at the rate it sold over the last {windowDays} days. Click an item to see its batches.', { threshold: qty(threshold), windowDays })}
           </p>
@@ -238,8 +263,8 @@ export const Stock = () => {
                 <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">{t('Item')}</th>
                 <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">{t('Status')}</th>
                 <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('In Stock')}</th>
-                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Sells At')}</th>
-                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Value')}</th>
+                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Sells At')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></th>
+                <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right">{t('Value')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></th>
                 <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase text-right" title={t('Units sold in the last {windowDays} days', { windowDays })}>{t('Sold {windowDays}', { windowDays })}d</th>
                 <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">{t('Lasts')}</th>
                 <th className="px-4 py-3 text-xs font-bold text-gray-500 uppercase">{t('Last Bought / Sold')}</th>
@@ -266,7 +291,10 @@ export const Stock = () => {
                 >
                   <td className="px-4 py-3 min-w-[14rem]">
                     <p className="font-bold text-gray-900"><ItemName name={item.name} /></p>
-                    <p className="text-xs text-gray-400">{t('HSN {value}', { value: item.hsn_code || '—' })}</p>
+                    <p className="text-xs text-gray-400">
+                      {t('HSN {value}', { value: item.hsn_code || '—' })}
+                      {!inMyGst(item) && <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 font-bold text-gray-500">{t('Not in my GST')}</span>}
+                    </p>
                   </td>
                   <td className="px-4 py-3">
                     <span className={cn('text-xs font-bold px-2 py-1 rounded-full whitespace-nowrap', STATUS[item.status].chip)}>
@@ -288,7 +316,7 @@ export const Stock = () => {
                     <p className="font-semibold text-gray-900">{item.stock_quantity > 0 ? formatRupees(item.value_at_price) : '—'}</p>
                     {isAdmin && item.stock_quantity > 0 && item.value_at_cost != null && (
                       <p className="text-xs text-gray-400 whitespace-nowrap" title={item.uncosted_batches ? t('Some stock has no recorded cost') : undefined}>
-                        {t('{amount} at cost', { amount: formatRupees(item.value_at_cost) })}{item.uncosted_batches ? '*' : ''}
+                        {t('{amount} at cost before GST', { amount: formatRupees(item.value_at_cost) })}{item.uncosted_batches ? '*' : ''}
                       </p>
                     )}
                   </td>
@@ -320,7 +348,7 @@ export const Stock = () => {
           <p className="border-t border-gray-100 px-6 py-3 text-sm text-gray-500">
             {tn(visible.length, '1 item', '{count} items')}
             {filter !== 'all' ? ` · ${STATUS[filter].label}` : ''}
-            {' · '}{t('worth {rupees} at selling price', { rupees: formatRupees(visible.reduce((acc, item) => acc + item.value_at_price, 0)) })}
+            {' · '}{t('worth {rupees} at selling price incl. GST', { rupees: formatRupees(visible.reduce((acc, item) => acc + item.value_at_price, 0)) })}
           </p>
         )}
       </div>

@@ -18,13 +18,28 @@ const DICTIONARY: Record<string, string> = {
   'Dark chocolate': 'ಡಾರ್ಕ್ ಚಾಕೊಲೇಟ್',
 };
 
-const google = { up: true, asked: [] as string[] };
+const google = { up: true, asked: [] as string[], spelt: [] as string[] };
+
+/** Google Input Tools, which writes a name in Kannada letters. */
+const SPELLING: Record<string, string> = {
+  'Sri Ganesh Bakery': 'ಶ್ರೀ ಗಣೇಶ್ ಬೇಕರಿ',
+  'Anitha Rao': 'ಅನಿತಾ ರಾವ್',
+  'Lakshmi Sweets & Bakery': 'ಲಕ್ಷ್ಮಿ ಸ್ವೀಟ್ಸ್ &amp; ಬೇಕರಿ',
+};
 let googleBase = '';
 
 const fakeGoogle = http.createServer((req, res) => {
   const url = new URL(req.url!, 'http://x');
-  if (url.pathname !== '/translate_a/single') { res.writeHead(404).end(); return; }
   if (!google.up) { res.writeHead(503).end('down'); return; }
+  if (url.pathname === '/request') {
+    const text = url.searchParams.get('text') ?? '';
+    assert.equal(url.searchParams.get('itc'), 'kn-t-i0-und');
+    google.spelt.push(text);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(['SUCCESS', [[text, [SPELLING[text] ?? `ಕ:${text}`], [], {}]]]));
+    return;
+  }
+  if (url.pathname !== '/translate_a/single') { res.writeHead(404).end(); return; }
   const text = url.searchParams.get('q') ?? '';
   assert.equal(url.searchParams.get('sl'), 'en');
   assert.equal(url.searchParams.get('tl'), 'kn');
@@ -121,6 +136,34 @@ describe('Kannada item names', () => {
     }
   });
 
+  it('writes a customer’s names in Kannada letters, and sends nothing else about them', async () => {
+    const created = await admin.post('/api/customers', {
+      shop_name: 'Sri Ganesh Bakery', name: 'Anitha Rao', phone: '9845012345', gstin: '29AABCS1234A1Z5', address: '12 Market Road',
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    const pass = await translateNow();
+    assert.equal(pass.customers_pending, 0);
+    const names = (await kannadaNames()).names;
+    assert.equal(names['Sri Ganesh Bakery'], 'ಶ್ರೀ ಗಣೇಶ್ ಬೇಕರಿ');
+    assert.equal(names['Anitha Rao'], 'ಅನಿತಾ ರಾವ್');
+    const sent = [...google.spelt, ...google.asked].join(' | ');
+    for (const secret of ['9845012345', '29AABCS1234A1Z5', 'Market Road']) assert.ok(!sent.includes(secret), `${secret} was sent`);
+
+    const found = (await admin.get(`/api/customers?search=${encodeURIComponent('ಗಣೇಶ್')}`)).body.data;
+    assert.deepEqual(found.map((c: any) => c.id), [created.body.id], 'searchable in Kannada');
+  });
+
+  it('writes a renamed customer’s name again, keeps the one that did not change, and reads &amp; as &', async () => {
+    const created = await admin.post('/api/customers', { shop_name: 'Old Bakery Name', name: 'Anitha Rao', phone: '9845012399' });
+    await translateNow();
+    const before = google.spelt.length;
+    const renamed = await admin.put(`/api/customers/${created.body.id}`, { shop_name: 'Lakshmi Sweets & Bakery', name: 'Anitha Rao', phone: '9845012399' });
+    assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+    await translateNow();
+    assert.deepEqual(google.spelt.slice(before), ['Lakshmi Sweets & Bakery'], 'only the changed name');
+    assert.equal((await kannadaNames()).names['Lakshmi Sweets & Bakery'], 'ಲಕ್ಷ್ಮಿ ಸ್ವೀಟ್ಸ್ & ಬೇಕರಿ');
+  });
+
   it('lets a cashier read the names but not start a translation', async () => {
     const created = await admin.post('/api/users', { name: 'Kannada Cashier', username: 'kn-cashier', password: 'kn-cashier-1', role: 'cashier' });
     assert.equal(created.status, 201, JSON.stringify(created.body));
@@ -129,6 +172,38 @@ describe('Kannada item names', () => {
     assert.equal((await cashier.get('/api/items/kannada-names')).status, 200);
     assert.equal((await cashier.post('/api/items/translate')).status, 403);
     assert.equal((await client(server.baseUrl).get('/api/items/kannada-names')).status, 401);
+  });
+});
+
+describe('Kannada customer names, turned off', () => {
+  let keepServer: TestServer;
+  let keepAdmin: Client;
+  const spelt: string[] = [];
+  const stand = http.createServer((req, res) => {
+    const url = new URL(req.url!, 'http://x');
+    if (url.pathname === '/request') spelt.push(url.searchParams.get('text') ?? '');
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify([[['ಕ', 'x', null, null, 10]], null, 'en']));
+  });
+
+  before(async () => {
+    await new Promise<void>((resolve) => stand.listen(0, '127.0.0.1', () => resolve()));
+    const base = `http://127.0.0.1:${(stand.address() as AddressInfo).port}`;
+    keepServer = await startServer({ TRANSLATE_ITEM_NAMES: 'on', TRANSLATE_CUSTOMER_NAMES: 'off', TRANSLATE_API_BASE: base });
+    keepAdmin = client(keepServer.baseUrl);
+    await keepAdmin.login('admin', ADMIN_PASSWORD);
+  });
+  after(async () => {
+    await keepServer?.stop();
+    await new Promise<void>((resolve) => stand.close(() => resolve()));
+  });
+
+  it('keeps customers’ names on this computer, while items are still translated', async () => {
+    await keepAdmin.post('/api/customers', { shop_name: 'Private Bakery', name: 'Some Person', phone: '9000000001' });
+    const pass = (await keepAdmin.post('/api/items/translate')).body;
+    assert.equal(pass.customers_pending, 0);
+    assert.deepEqual(spelt, []);
+    assert.equal((await keepAdmin.get('/api/items/kannada-names')).body.names['Private Bakery'], undefined);
   });
 });
 

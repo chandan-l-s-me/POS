@@ -1,12 +1,12 @@
 /**
- * Builds the package a shop installs: release/VyaparaBilling-<version>/ and a
+ * Builds the package a shop installs: release/VasaviBilling-<version>/ and a
  * .zip of it. The shop needs nothing else on the computer — no Node, no npm,
  * no build step — and never opens a terminal.
  *
  *   npm run package
  *
  * Layout of the package:
- *   Install Vyapara.bat / Update Vyapara.bat / Uninstall Vyapara.bat
+ *   Install Vasavi.bat / Update Vasavi.bat / Uninstall Vasavi.bat
  *   README.txt                 what to do, for whoever installs it
  *   scripts/                   the PowerShell behind the three .bat files
  *   node/node.exe              the Node.js runtime this was built and tested with
@@ -24,7 +24,7 @@ import { build } from 'esbuild';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { version } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-const NAME = `VyaparaBilling-${version}`;
+const NAME = `VasaviBilling-${version}`;
 const OUT = path.join(ROOT, 'release', NAME);
 const APP = path.join(OUT, 'app');
 
@@ -101,7 +101,7 @@ fs.mkdirSync(path.join(OUT, 'service'));
 copy(winsw, path.join(OUT, 'service', 'VyaparaBilling.exe'));
 
 step('Adding the installer');
-for (const file of ['Install Vyapara.bat', 'Update Vyapara.bat', 'Uninstall Vyapara.bat', 'README.txt']) {
+for (const file of ['Install Vasavi.bat', 'Update Vasavi.bat', 'Uninstall Vasavi.bat', 'README.txt']) {
   copy(path.join(ROOT, 'installer', file), path.join(OUT, file));
 }
 copy(path.join(ROOT, 'installer', 'scripts'), path.join(OUT, 'scripts'));

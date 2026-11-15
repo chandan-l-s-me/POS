@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { Item, CartItem, CartSegment, Customer } from '../types';
 // The same allocation and arithmetic the server runs when the bill is saved,
 // so the figure on the till is the figure in the ledger.
-import { allocateFifo, computeLine, priceSegments, round2, round3, type Allocation } from '../lib/billMath';
+import { allocateFifo, applyBulkPrice, bulkPriceFor, computeLine, priceSegments, round2, round3, type Allocation, type BulkPrice } from '../lib/billMath';
 
 type CartBatch = CartItem['batches'][number];
 
@@ -29,6 +29,19 @@ export interface BillingCart {
   paymentMethod: PaymentMethod;
   paymentAmounts: PaymentAmounts;
   totals: CartTotals;
+  /** Set when this tab is a saved bill opened for editing: saving replaces that bill. */
+  editing?: { billId: number; billNumber: string };
+}
+
+/** A saved bill, loaded into a tab for editing (see src/lib/cartActions.ts). */
+export interface BillToEdit {
+  billId: number;
+  billNumber: string;
+  customer: Customer | null;
+  discount: number;
+  paymentMethod: PaymentMethod;
+  paymentAmounts: PaymentAmounts;
+  lines: Array<{ item: Item; batches: CartBatch[]; quantity: number }>;
 }
 
 interface CartState {
@@ -42,8 +55,13 @@ interface CartState {
   addItem: (item: Item, batches: CartBatch[], quantity?: number) => void;
   removeItem: (itemId: number) => void;
   updateQuantity: (itemId: number, quantity: number) => void;
-  /** Re-price a line from a fresh read of the item's batches. */
-  setItemBatches: (itemId: number, batches: CartBatch[]) => void;
+  /**
+   * Re-price a line from a fresh read of the item's batches (and bulk prices,
+   * when sent): in every tab holding it, or only in tab `cartId`.
+   */
+  setItemBatches: (itemId: number, batches: CartBatch[], bulkPrices?: BulkPrice[], cartId?: string) => void;
+  /** Open a saved bill in its own tab for editing, or switch to it if it is open already. */
+  startEditingBill: (bill: BillToEdit) => void;
   setCustomer: (customer: Customer | null) => void;
   setDiscount: (discount: number) => void;
   setPaymentMethod: (method: PaymentMethod) => void;
@@ -72,8 +90,10 @@ const buildCartLine = (item: Item, batches: CartBatch[], quantity: number): Cart
   const priced: Allocation[] = shortfall > 0
     ? [...allocations, { batch_id: 0, quantity: shortfall, selling_price: batches[batches.length - 1]?.selling_price ?? item.price }]
     : allocations;
+  // Enough of it on the bill for a bulk price: every unit at that price.
+  const bulk = bulkPriceFor(item.bulk_prices, qty);
 
-  const segments: CartSegment[] = priceSegments(priced).map((segment) => {
+  const segments: CartSegment[] = priceSegments(applyBulkPrice(priced, bulk)).map((segment) => {
     const line = computeLine(item, segment.unit_price, segment.quantity);
     return {
       quantity: line.quantity,
@@ -94,6 +114,7 @@ const buildCartLine = (item: Item, batches: CartBatch[], quantity: number): Cart
     available,
     unit_price: segments[0]?.unit_price ?? defaultPrice,
     segments,
+    bulk_price: bulk,
     sgst_amount: sum('sgst_amount'),
     cgst_amount: sum('cgst_amount'),
     igst_amount: sum('igst_amount'),
@@ -103,8 +124,12 @@ const buildCartLine = (item: Item, batches: CartBatch[], quantity: number): Cart
 };
 
 /** Rebuild a line after one of its inputs changed. */
-const rebuild = (line: CartItem, changes: { batches?: CartBatch[]; quantity?: number }) =>
-  buildCartLine(line, changes.batches ?? line.batches, changes.quantity ?? line.quantity);
+const rebuild = (line: CartItem, changes: { batches?: CartBatch[]; quantity?: number; bulkPrices?: BulkPrice[] }) =>
+  buildCartLine(
+    changes.bulkPrices ? { ...line, bulk_prices: changes.bulkPrices } : line,
+    changes.batches ?? line.batches,
+    changes.quantity ?? line.quantity
+  );
 
 const createEmptyCart = (index: number): BillingCart => ({
   id: `bill-tab-${Date.now()}-${index}`,
@@ -227,7 +252,7 @@ export const useCartStore = create<CartState>((set) => {
               ...cart,
               items: cart.items.map((cartItem) =>
                 cartItem.id === item.id
-                  ? rebuild(cartItem, { batches, quantity: cartItem.quantity + quantity })
+                  ? rebuild(cartItem, { batches, quantity: cartItem.quantity + quantity, bulkPrices: item.bulk_prices })
                   : cartItem
               ),
             };
@@ -252,15 +277,15 @@ export const useCartStore = create<CartState>((set) => {
         })),
       })),
 
-    setItemBatches: (itemId, batches) =>
+    setItemBatches: (itemId, batches, bulkPrices, cartId) =>
       set((state) => ({
         // Every open bill tab holding this item, not just the active one: a
         // refresh means the stock moved, wherever the item is waiting.
         carts: state.carts.map((cart) =>
-          cart.items.some((item) => item.id === itemId)
+          (cartId == null || cart.id === cartId) && cart.items.some((item) => item.id === itemId)
             ? recalculateCart({
                 ...cart,
-                items: cart.items.map((item) => (item.id === itemId ? rebuild(item, { batches }) : item)),
+                items: cart.items.map((item) => (item.id === itemId ? rebuild(item, { batches, bulkPrices }) : item)),
               })
             : cart
         ),
@@ -319,10 +344,30 @@ export const useCartStore = create<CartState>((set) => {
         })),
       })),
 
+    startEditingBill: (bill) =>
+      set((state) => {
+        const open = state.carts.find((cart) => cart.editing?.billId === bill.billId);
+        if (open) return { activeCartId: open.id };
+        const cart: BillingCart = recalculateCart({
+          ...createEmptyCart(state.carts.length + 1),
+          name: `Edit ${bill.billNumber}`,
+          editing: { billId: bill.billId, billNumber: bill.billNumber },
+          items: bill.lines.map((line) => buildCartLine(line.item, line.batches, line.quantity)),
+          customer: bill.customer,
+          discount: bill.discount,
+          paymentMethod: bill.paymentMethod,
+          paymentAmounts: bill.paymentAmounts,
+        });
+        return { carts: [...state.carts, cart], activeCartId: cart.id };
+      }),
+
     clearCart: () =>
       set((state) => ({
         carts: updateActiveCart(state.carts, state.activeCartId, (cart) => ({
           ...cart,
+          // An edit tab, saved or abandoned, becomes an ordinary new bill.
+          editing: undefined,
+          name: cart.editing ? `Bill ${state.carts.findIndex((entry) => entry.id === cart.id) + 1}` : cart.name,
           items: [],
           customer: null,
           discount: 0,

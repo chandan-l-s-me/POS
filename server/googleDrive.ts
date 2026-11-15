@@ -9,7 +9,7 @@ import zlib from 'zlib';
  * The owner connects once from Settings (OAuth, as themselves). The app asks
  * only for `drive.file`: it can create files and see or delete the files it
  * created, and nothing else in the Drive. Every backup — the daily automatic
- * one and Backup Now — is gzipped and uploaded into a "Vyapara Billing
+ * one and Backup Now — is gzipped and uploaded into a "Vasavi Billing
  * Backups" folder, and automatic ones past BACKUP_KEEP_DAYS are deleted there
  * as they are locally.
  *
@@ -28,7 +28,7 @@ const AUTH_URL = () => process.env.GOOGLE_AUTH_URL || 'https://accounts.google.c
 const API_BASE = () => process.env.GOOGLE_API_BASE || 'https://www.googleapis.com';
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.file', 'openid', 'email'];
-const FOLDER_NAME = 'Vyapara Billing Backups';
+const FOLDER_NAME = 'Vasavi Billing Backups';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
 export interface DriveState {

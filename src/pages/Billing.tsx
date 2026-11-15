@@ -24,6 +24,8 @@ import { Receipt } from '../components/Receipt';
 import { Link } from 'react-router-dom';
 import { Customer, CartItem, Item } from '../types';
 import { customerContactName, customerDisplayName } from '../lib/customer';
+import { searchList } from '../lib/fuzzy';
+import { CUSTOMER_SEARCH, ITEM_SEARCH } from '../lib/searchFields';
 // Adds go through here: it reads the item's batches so each unit is priced
 // first-in first-out, and refuses stock that is not there.
 import { addItemToCart, refreshCartBatches } from '../lib/cartActions';
@@ -33,8 +35,12 @@ import type { ApiError } from '../api';
 import { round2 } from '../lib/billMath';
 import { FORM_FIELD, FORM_LABEL, HEADER_NOTE, ROW_FIELD, TABLE_HEAD_ROW } from '../lib/entryStyles';
 import { useAnchoredMenu } from '../hooks/useAnchoredMenu';
-import { billTabName, itemLabel, paymentLabel, t, unitLabel } from '../i18n';
-import { ItemName } from '../components/ItemName';
+import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
+import { findByBarcode, looksLikeBarcode, normalizeBarcode } from '../lib/barcode';
+import { lookupBarcode } from '../lib/barcodeLookup';
+import { billTabName, itemLabel, localName, paymentLabel, t, unitLabel, useItemNamesStore } from '../i18n';
+import { ItemName, LocalName } from '../components/ItemName';
+import { BulkNote } from '../components/BulkPrices';
 
 const normalizeCustomerKey = (value: string) => value.trim().toLowerCase();
 
@@ -46,6 +52,8 @@ const describeSegments = (line: CartItem) =>
 
 export const Billing = () => {
   const { items, customers, settings, refreshItems, setCustomers, itemsComplete } = useDataStore();
+  // Kannada names are searched too; the lists follow when they arrive.
+  const kannadaNames = useItemNamesStore((state) => state.names);
   const {
     carts,
     activeCartId,
@@ -58,6 +66,7 @@ export const Billing = () => {
     setCustomer,
     setPaymentMethod,
     setPaymentAmount,
+    setDiscount,
     clearCart,
   } = useCartStore();
 
@@ -69,6 +78,8 @@ export const Billing = () => {
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastBillId, setLastBillId] = useState<number | null>(null);
+  // The number of the bill just saved by editing it, for the confirmation.
+  const [savedEdit, setSavedEdit] = useState<string | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [quantityInputs, setQuantityInputs] = useState<Record<number, string>>({});
   const [customerQuery, setCustomerQuery] = useState('');
@@ -101,8 +112,25 @@ export const Billing = () => {
   const paymentMethod = activeCart?.paymentMethod || 'cash';
   const paymentAmounts = activeCart?.paymentAmounts || { cash: 0, upi: 0, credit: 0 };
   const totals = activeCart?.totals || { subtotal: 0, tax: 0, total: 0 };
-  // The payable is floored to whole rupees; the paise dropped are shown.
-  const roundOff = round2(totals.subtotal + totals.tax - totals.total);
+  // A rupee amount off the whole bill, after GST. GST is charged on the full
+  // prices; the discount comes off what the customer pays.
+  const discount = activeCart?.discount || 0;
+  // How the grand total is reached: subtotal + GST − discount, then floored to
+  // whole rupees; the paise dropped are the round off (never more than 99p).
+  const grossTotal = round2(totals.subtotal + totals.tax);
+  const roundOff = round2(totals.total - (grossTotal - discount));
+  const discountTooBig = discount > grossTotal && cartItems.length > 0;
+  // What is typed in the discount box, so "5." can be typed on the way to 5.50.
+  const [discountText, setDiscountText] = useState('');
+  useEffect(() => {
+    if (Number(discountText || 0) !== discount) setDiscountText(discount ? String(discount) : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [discount, activeCartId]);
+  const onDiscountChange = (text: string) => {
+    setDiscountText(text);
+    const value = round2(Number(text || 0));
+    setDiscount(Number.isFinite(value) && value > 0 ? value : 0);
+  };
 
   const receiptRef = useRef<HTMLDivElement>(null);
   const handlePrint = usePrint({
@@ -121,14 +149,9 @@ export const Billing = () => {
   const localItemMatches = useMemo(() => {
     if (!search) return [];
 
-    return items
-      .filter(
-        (item) =>
-          item.name.toLowerCase().includes(search.toLowerCase()) ||
-          item.hsn_code?.includes(search)
-      )
-      .slice(0, 8);
-  }, [items, search]);
+    // Forgives a slip ("suger" finds Sugar) when nothing contains the text.
+    return searchList(items, search, ITEM_SEARCH).slice(0, 8);
+  }, [items, search, kannadaNames]);
 
   // When the catalogue is larger than the local cache, items beyond it used to
   // be unreachable: unscannable, unbillable and invisible, with no error. Ask
@@ -164,25 +187,14 @@ export const Billing = () => {
   ]);
 
   const customerSuggestions = useMemo(() => {
-    const query = normalizeCustomerKey(customerQuery || customerDisplayName(customer));
+    const query = customerQuery || customerDisplayName(customer);
     // The server sends customers already sorted by bakery/shop name.
-    if (!query) return customers.slice(0, 8);
-
-    const matches = customers.filter(
-      (customerItem) =>
-        normalizeCustomerKey(customerItem.shop_name || '').includes(query) ||
-        normalizeCustomerKey(customerItem.name || '').includes(query) ||
-        (customerItem.phone || '').includes(query) ||
-        normalizeCustomerKey(customerItem.gstin || '').includes(query)
-    );
-
-    // Customers whose bakery/shop name *starts* with what was typed come
-    // first, so "sri" puts "Sri Ganesh Bakery" above a customer who merely
-    // has "sri" somewhere in the owner's name. Stable otherwise.
-    const rank = (customerItem: Customer) =>
-      normalizeCustomerKey(customerDisplayName(customerItem)).startsWith(query) ? 0 : 1;
-    return [...matches].sort((a, b) => rank(a) - rank(b)).slice(0, 8);
-  }, [customers, customerQuery, customer]);
+    if (!query.trim()) return customers.slice(0, 8);
+    // A name starting with what was typed comes first ("sri" puts "Sri
+    // Ganesh Bakery" above an owner who merely has "sri" in their name), and
+    // a slip ("ganseh") still finds the closest names.
+    return searchList(customers, query, CUSTOMER_SEARCH).slice(0, 8);
+  }, [customers, customerQuery, customer, kannadaNames]);
 
   // Customers are no longer preloaded app-wide, so the billing screen fetches
   // the list it needs for the customer picker.
@@ -365,6 +377,46 @@ export const Billing = () => {
     if (await addItemToCart(item)) setSearch('');
   };
 
+  /**
+   * A scanned barcode: the item goes on the bill (priced from its batches,
+   * refused with a message when out of stock). A code no item has says so,
+   * rather than doing nothing.
+   */
+  const addScannedCode = async (code: string) => {
+    let item: Item | undefined;
+    try {
+      item = await lookupBarcode(code);
+    } catch (error: any) {
+      notice.show(error?.message || t('Could not look up the barcode. Try again.'), 'warning');
+      return;
+    }
+    if (item) {
+      await addToBill(item);
+      return;
+    }
+    const shown = normalizeBarcode(code);
+    notice.show(
+      isAdmin
+        ? t('No item has the barcode {code}. Add it to the item in Items, or on its next purchase.', { code: shown })
+        : t('No item has the barcode {code}. Ask an admin to add it to the item.', { code: shown }),
+      'warning'
+    );
+  };
+
+  // Not while the bill is being reviewed or saved (the cart must stay as the
+  // cashier saw it, and a saved bill clears it), nor while a new customer is
+  // being entered. A scan on the "sale successful" box is the next customer's
+  // first item: it closes the box and starts their bill.
+  useBarcodeScanner((code) => {
+    setShowSuccessModal(false);
+    // A scan into a quantity box typed the code into it for a moment: the box
+    // is back to its number, so drop its draft (it would hide the added unit)
+    // and any stock warning the long number raised.
+    setQuantityInputs({});
+    notice.clear();
+    void addScannedCode(code);
+  }, !showConfirmModal && !showCreateCustomerModal && !isProcessing);
+
   const handleCompleteSale = () => {
     if (cartItems.length === 0) {
       return;
@@ -373,6 +425,11 @@ export const Billing = () => {
     const short = cartItems.find((line) => line.quantity > line.available);
     if (short) {
       notice.show(t('Only {available} {metric} of {name} in stock — reduce the quantity.', { available: short.available, metric: unitLabel(short.metric), name: itemLabel(short.name) }), 'warning');
+      return;
+    }
+
+    if (discountTooBig) {
+      notice.show(t('The discount is more than the bill. Lower it to at most Rs. {value}.', { value: grossTotal.toFixed(2) }), 'warning');
       return;
     }
 
@@ -474,6 +531,7 @@ export const Billing = () => {
         // total the screen showed is sent so the server can refuse if stock
         // moved and the price no longer matches.
         items: cartItems.map((item) => ({ id: item.id, quantity: item.quantity })),
+        discount_amount: discount,
         expected_total: totals.total,
         payment_method: paymentMethod,
         cash_amount: paymentAmounts.cash,
@@ -481,8 +539,11 @@ export const Billing = () => {
         credit_amount: paymentAmounts.credit,
       };
 
-      const result = await api.createBill(billData);
+      // A tab opened from History → Edit Bill replaces that bill instead.
+      const editing = activeCart?.editing;
+      const result = editing ? await api.updateBill(editing.billId, billData) : await api.createBill(billData);
       setLastBillId(result.bill_id);
+      setSavedEdit(editing ? editing.billNumber : null);
       // Show the confirmation. This was `false`, so the modal below — with the
       // receipt preview and the reprint button — was unreachable: a completed
       // sale gave the cashier no on-screen confirmation at all, and if the
@@ -518,6 +579,20 @@ export const Billing = () => {
               <p className="text-sm text-gray-600 mt-1">
                 {t('Search an item and press Enter to add it. Each unit is billed at the price of the stock it comes from, oldest first.')}
               </p>
+              {activeCart?.editing && (
+                <div className="mt-3 flex flex-wrap items-center gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm" role="status">
+                  <span className="font-bold text-amber-800">
+                    {t('Editing bill {bill_number}. Saving replaces it, keeping its number and date.', { bill_number: activeCart.editing.billNumber })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => closeBillingTab(activeCart.id)}
+                    className="rounded-xl border border-amber-300 bg-white px-3 py-1 text-xs font-bold text-amber-800 hover:bg-amber-100"
+                  >
+                    {t('Cancel edit')}
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* One tab per open bill. The active one can be renamed. */}
@@ -550,7 +625,7 @@ export const Billing = () => {
                       <button onClick={() => setActiveCart(cart.id)} className="text-left">
                         <p className="whitespace-nowrap text-sm font-bold leading-tight">{billTabName(cart.name)}</p>
                         <p className="whitespace-nowrap text-[11px] opacity-80">
-                          {t('{count} items', { count: cart.items.length })}{cart.customer ? ` | ${customerDisplayName(cart.customer)}` : ''}
+                          {t('{count} items', { count: cart.items.length })}{cart.customer ? ` | ${localName(customerDisplayName(cart.customer))}` : ''}
                         </p>
                       </button>
                     )}
@@ -646,10 +721,10 @@ export const Billing = () => {
                         onMouseDown={() => selectCustomer(customerItem)}
                         className="w-full px-4 py-3 text-left hover:bg-orange-50 transition-colors"
                       >
-                        <p className="font-semibold text-gray-900">{customerDisplayName(customerItem)}</p>
+                        <p className="font-semibold text-gray-900"><LocalName name={customerDisplayName(customerItem)} /></p>
                         <p className="text-xs text-gray-500">
                           {[
-                            customerContactName(customerItem),
+                            localName(customerContactName(customerItem)) || null,
                             customerItem.phone || t('No phone'),
                             customerItem.gstin || t('No GSTIN'),
                           ].filter(Boolean).join(' | ')}
@@ -881,6 +956,7 @@ export const Billing = () => {
                               {t('then {value}', { value: laterPrices.join(', ') })}
                             </p>
                           )}
+                          <BulkNote line={item} className="mt-1 text-right" />
                         </td>
 
                         <td className="px-2 py-2.5">
@@ -934,11 +1010,20 @@ export const Billing = () => {
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
-                            const exactMatch = items.find(
-                              (item) =>
-                                item.name.toLowerCase() === search.trim().toLowerCase() ||
-                                item.hsn_code === search.trim()
-                            );
+                            const typed = search.trim();
+                            // A scan into this box: its barcode wins over names
+                            // and HSN codes that merely contain the digits.
+                            const exactMatch =
+                              findByBarcode(items, typed) ??
+                              items.find(
+                                (item) =>
+                                  item.name.toLowerCase() === typed.toLowerCase() ||
+                                  item.hsn_code === typed
+                              );
+                            if (!exactMatch && looksLikeBarcode(typed)) {
+                              void addScannedCode(typed).then(() => setSearch(''));
+                              return;
+                            }
                             const firstMatch = filteredItems[0];
 
                             if (exactMatch || firstMatch) {
@@ -955,8 +1040,9 @@ export const Billing = () => {
                           }
                           if (e.key === 'Escape') setShowItemMenu(false);
                         }}
-                        placeholder={t('Search item or HSN')}
+                        placeholder={t('Search or scan item')}
                         aria-label={t('Item search')}
+                        data-barcode-input
                         title={search}
                         className={ROW_FIELD}
                       />
@@ -1026,20 +1112,60 @@ export const Billing = () => {
               </table>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                <p className="text-xs font-bold text-gray-500 uppercase">{t('Subtotal')}</p>
+                <p className="text-xs font-bold text-gray-500 uppercase">{t('Subtotal')}<span className={HEADER_NOTE}>{t('before GST')}</span></p>
                 <p className="text-2xl font-black text-gray-900 mt-1">{t('Rs. {value}', { value: totals.subtotal.toFixed(2) })}</p>
               </div>
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
                 <p className="text-xs font-bold text-gray-500 uppercase">{t('GST Total')}</p>
                 <p className="text-2xl font-black text-amber-600 mt-1">{t('Rs. {value}', { value: totals.tax.toFixed(2) })}</p>
               </div>
+              <div className={cn('rounded-2xl p-4 border', discountTooBig ? 'border-red-200 bg-red-50' : 'border-gray-100 bg-gray-50')}>
+                <label htmlFor="bill-discount" className="text-xs font-bold text-gray-500 uppercase">
+                  {t('Discount')}<span className={HEADER_NOTE}>{t('Rs. off the total')}</span>
+                </label>
+                <div className="mt-1 flex items-center gap-1">
+                  <span className="text-lg font-black text-gray-400">{t('Rs.')}</span>
+                  <input
+                    id="bill-discount"
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="0.01"
+                    value={discountText}
+                    onChange={(e) => onDiscountChange(e.target.value)}
+                    onFocus={(e) => e.target.select()}
+                    placeholder="0"
+                    disabled={cartItems.length === 0}
+                    className="w-full min-w-0 rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xl font-black tabular-nums text-gray-900 outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50"
+                  />
+                </div>
+                {discountTooBig && (
+                  <p className="mt-1 text-xs font-semibold text-red-600">{t('More than the bill (Rs. {value}).', { value: grossTotal.toFixed(2) })}</p>
+                )}
+              </div>
               <div className="bg-orange-50 rounded-2xl p-4 border border-orange-100">
-                <p className="text-xs font-bold text-orange-600 uppercase">{t('Grand Total')}</p>
+                <p className="text-xs font-bold text-orange-600 uppercase">{t('Grand Total')}<span className={HEADER_NOTE}>{t('incl. GST')}</span></p>
                 <p className="text-2xl font-black text-orange-700 mt-1">{t('Rs. {value}', { value: totals.total.toFixed(2) })}</p>
-                {roundOff > 0 && (
-                  <p className="mt-1 text-xs text-gray-500">{t('Rounded down by Rs. {value}', { value: roundOff.toFixed(2) })}</p>
+                {/* How the total is reached, so the cashier can explain it. */}
+                {cartItems.length > 0 && (
+                  <dl className="mt-2 space-y-0.5 text-xs tabular-nums text-gray-600" data-total-breakdown>
+                    <div className="flex justify-between gap-2">
+                      <dt>{t('Subtotal + GST')}</dt>
+                      <dd>{t('Rs. {value}', { value: grossTotal.toFixed(2) })}</dd>
+                    </div>
+                    {discount > 0 && (
+                      <div className="flex justify-between gap-2">
+                        <dt>{t('Discount')}</dt>
+                        <dd>− {t('Rs. {value}', { value: discount.toFixed(2) })}</dd>
+                      </div>
+                    )}
+                    <div className="flex justify-between gap-2">
+                      <dt>{t('Round off')}</dt>
+                      <dd>{roundOff < 0 ? '− ' : ''}{t('Rs. {value}', { value: Math.abs(roundOff).toFixed(2) })}</dd>
+                    </div>
+                  </dl>
                 )}
               </div>
             </div>
@@ -1115,7 +1241,7 @@ export const Billing = () => {
                 <p className="text-xs font-bold text-orange-600 uppercase">{t('Ready To Bill')}</p>
                 <p className="text-2xl font-black text-orange-700 mt-1">{t('Rs. {value}', { value: totals.total.toFixed(2) })}</p>
                 <p className="mt-1 text-sm text-gray-600">
-                  {customer ? t('Billing for {customer}', { customer: customerDisplayName(customer) }) : t('Walk-in billing')}
+                  {customer ? t('Billing for {customer}', { customer: localName(customerDisplayName(customer)) }) : t('Walk-in billing')}
                 </p>
               </div>
 
@@ -1125,7 +1251,7 @@ export const Billing = () => {
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-orange-600 px-6 py-4 font-bold text-white shadow-lg shadow-orange-100 transition-all hover:bg-orange-700 disabled:opacity-60"
               >
                 <Printer size={18} />
-                {isProcessing ? t('Processing...') : t('Pay & Print')}
+                {isProcessing ? t('Processing...') : activeCart?.editing ? t('Save changes & Print') : t('Pay & Print')}
               </button>
             </div>
           </div>
@@ -1144,9 +1270,11 @@ export const Billing = () => {
               <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-orange-100 text-orange-600">
                 <Printer size={40} />
               </div>
-              <h3 className="mb-2 text-2xl font-black text-gray-900">{t('Confirm Sale')}</h3>
+              <h3 className="mb-2 text-2xl font-black text-gray-900">{activeCart?.editing ? t('Save changes to {bill_number}?', { bill_number: activeCart.editing.billNumber }) : t('Confirm Sale')}</h3>
               <p className="mb-8 text-gray-500">
-                {t('Are you sure you want to complete this transaction of Rs. {value}?', { value: totals.total.toFixed(2) })}
+                {activeCart?.editing
+                  ? t('The bill will now be Rs. {value}. Its stock and the customer’s credit are updated to match.', { value: totals.total.toFixed(2) })
+                  : t('Are you sure you want to complete this transaction of Rs. {value}?', { value: totals.total.toFixed(2) })}
               </p>
 
               <div className="flex flex-col gap-3">
@@ -1154,7 +1282,7 @@ export const Billing = () => {
                   onClick={processSale}
                   className="w-full rounded-2xl bg-orange-600 py-4 font-bold text-white shadow-lg shadow-orange-100 transition-all hover:bg-orange-700"
                 >
-                  {t('Yes, Complete Sale')}
+                  {activeCart?.editing ? t('Yes, save changes') : t('Yes, Complete Sale')}
                 </button>
                 <button
                   onClick={() => setShowConfirmModal(false)}
@@ -1312,8 +1440,8 @@ export const Billing = () => {
               <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-green-100 text-green-600">
                 <ShoppingCart size={40} />
               </div>
-              <h3 className="mb-2 text-2xl font-black text-gray-900">{t('Sale Successful!')}</h3>
-              <p className="mb-6 text-gray-500">{t('The transaction has been completed and recorded.')}</p>
+              <h3 className="mb-2 text-2xl font-black text-gray-900">{savedEdit ? t('Bill {bill_number} updated', { bill_number: savedEdit }) : t('Sale Successful!')}</h3>
+              <p className="mb-6 text-gray-500">{savedEdit ? t('The changes are saved, with the same bill number and date.') : t('The transaction has been completed and recorded.')}</p>
 
               {settings.bill_format !== 'standard' && (
                 <div className="mb-6 max-h-[300px] overflow-auto rounded-2xl border border-gray-100 bg-gray-50 p-4">
