@@ -30,6 +30,8 @@ import { itemLabel, t, unitLabel, useItemNamesStore } from '../i18n';
 import { HEADER_NOTE } from '../lib/entryStyles';
 import { ItemName } from '../components/ItemName';
 import { bulkSummary } from '../components/BulkPrices';
+import { hasVoiceSearch, VoiceSearchButton } from '../components/VoiceSearchButton';
+import { ITEM_SEARCH } from '../lib/searchFields';
 
 /** Ticked unless set to 0: items from before the option are included. */
 const inMyGst = (item: Partial<Item>) => item.in_my_gst !== 0 && item.in_my_gst !== false;
@@ -47,6 +49,7 @@ export const Items = () => {
   // The item whose batches are open in the stock panel.
   const [stockItem, setStockItem] = useState<Item | null>(null);
   const refreshItems = useDataStore((state) => state.refreshItems);
+  const catalogue = useDataStore((state) => state.items);
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
@@ -277,8 +280,14 @@ export const Items = () => {
             onChange={(e) => setSearch(e.target.value)}
             data-barcode-input
             placeholder={t('Search by name, HSN or barcode...')}
-            className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm"
+            className={cn(
+              'w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none shadow-sm',
+              hasVoiceSearch() && 'pr-12'
+            )}
           />
+          {/* The guesses are weighed against the catalogue this computer
+              holds; the list itself is searched on the server, as typed. */}
+          <VoiceSearchButton value={search} onChange={setSearch} list={catalogue} fields={ITEM_SEARCH} shortcut />
         </div>
         {/* Items are created on the Purchases screen, where their selling
             price and first stock are entered together. */}

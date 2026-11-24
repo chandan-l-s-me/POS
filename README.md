@@ -31,6 +31,7 @@ change it under Settings. If you would rather set it yourself, put it in
 | `npm run test:only` | Run the tests without rebuilding |
 | `npm run lint` | TypeScript type check |
 | `npm run seed:demo` | Load sample data (never on a real shop's database) |
+| `npm run seed:test` | Fill an empty database with four months of test data through the API (see `scripts/seed-test-data.ts`) |
 | `npm run package` | Build the installable package for a shop (see below) |
 
 ### Giving it to a shop
@@ -590,6 +591,83 @@ On upgrade:
 - Anything that was really an HSN code moves to `hsn_code` and is removed
   from `barcode`.
 
+### Search by voice
+
+The item and customer searches on **Billing**, **Quick Bill**,
+**Purchases** (each row's item box and the supplier box) and **Items** have a
+microphone. Tap it, or press **F2** at the counter, and say the name: "sugar one
+kilo", "Ganesh Bakery", "nine eight four five…" for a phone number. The
+words appear in the box as they are spoken, the usual list of matches
+follows, and listening stops at the first pause. The cursor stays in the box
+and **Enter** picks the first match, as after typing. Voice only searches: it
+never adds an item or picks a customer by itself.
+
+- **Esc** cancels and puts the box back as it was. **Enter** while listening
+  stops and searches for what was said so far. Typing, or a barcode scan,
+  cancels listening and goes into the box as usual.
+- **F2** in a search box starts listening in that box; F2 again stops and
+  searches. Anywhere else on the page it starts the page's main search
+  (Billing's item search; on Purchases, the last row; the Items search).
+  **Ctrl+M** does the same, for laptops whose F keys need Fn held. The Fn key
+  itself never reaches a web page, so it cannot be the key. The rule is in
+  `src/lib/voiceShortcut.ts`.
+- On Quick Bill, the microphone beside *Search items…* opens the item list
+  already listening, with the keyboard kept down so the matches stay in view.
+- If nothing is heard, the microphone is blocked, or there is no internet, a
+  short message says so under the microphone and the box is left as it was.
+
+**What is understood.** English as spoken in India (`en-IN`), whichever
+language the screens are in. Numbers come out as the catalogue writes them
+("one kilo" → `1 kg`, "five hundred grams" → `500 g`, "two fifty" → `250`);
+digits said one by one become one code ("zero four zero two" → `0402`,
+"double nine…" for a phone number). The recogniser offers up to five guesses
+and the one that matches the catalogue best is kept, so "east"/"yeast" picks
+Yeast. A word split in two ("my da") or spelt by ear ("rawa") is matched to
+the catalogue word it sounds like (Maida, Rava). The rules are in
+`src/lib/voiceQuery.ts`, tested by `tests/voice-query.test.ts`.
+
+**Which recogniser.**
+
+| Where | Recogniser | Needs |
+| --- | --- | --- |
+| Counter (Chrome or Edge), Chrome on a phone, Safari | The browser's own (Web Speech API) | Internet |
+| The Android app | Android's own, through `VoiceSearchPlugin.java` | Internet, or the phone's English (India) offline speech pack |
+| Firefox, or an Android app installed before voice search | None: the microphone is not shown | — |
+
+**Privacy.** The audio goes to Google to be turned into words (Chrome's and
+Android's recognisers are Google's), as the shop's item names already go to
+Google Translate. Nothing passes through the shop's server, and the app keeps
+no audio or transcript. The server allows the microphone to the app's own
+pages only (`Permissions-Policy: microphone=(self)`).
+
+**Setting up a counter.**
+
+- It needs a microphone. A shop is noisy: a USB headset or a desk microphone
+  pointed at the cashier is recognised far better than a laptop's built-in one.
+- Chrome asks once to allow the microphone for the site, and remembers. In
+  kiosk mode, allow it before switching to kiosk, or set the Chrome policy
+  `AudioCaptureAllowedUrls` to `http://127.0.0.1:3000`.
+- The address must be `http://127.0.0.1` or `localhost` (or HTTPS, as through
+  the tunnel): browsers give the microphone only to secure pages.
+
+**The phone app** needs the new APK (version code 5) for the microphone. It
+asks for microphone permission the first time. Phones with the older APK work
+as before, without a microphone, until it is installed.
+
+**Check by hand after a change** (the tests use stand-in recognisers):
+
+| Try | Expect |
+| --- | --- |
+| Billing: click in the item search, press F2, say "sugar one kilo" | Box fills as you speak; ends as `sugar 1 kg`; Enter adds the first match |
+| Billing customer box: say a bakery's name | That bakery listed first |
+| Purchases: microphone in a row, say an item | That row's matches open |
+| Items: F2 with the cursor anywhere on the page, say an item | The list narrows to it |
+| Say nothing | "Did not catch that…" under the microphone; box unchanged |
+| Block the microphone in Chrome, try again | "The microphone is not allowed…" |
+| While listening, press Esc / start typing | Box back as before / typed text goes in |
+| Android app: microphone beside *Search items…* | Permission asked once; list opens listening; keyboard stays down |
+| Android app: press Home while listening | Listening stops |
+
 ---
 
 ## How the money is calculated
@@ -703,6 +781,8 @@ real user gesture.
 | `fullscreen.test.ts` | Fullscreen shim: vendor prefixes, refusals, storage failures, restoring after printing |
 | `purchases-reports.test.ts` | Purchases, reports, analytics, audit log, backups |
 | `migration.test.ts` | Upgrading an existing database in place: subtotals, the credit ledger, stock batches |
+| `voice-query.test.ts` | Search by voice: spoken numbers and units, choosing among the recogniser's guesses, sound-alike words |
+| `voice-engine.test.ts` | Search by voice: timeouts, one microphone at a time, the browser recogniser's events and errors, the microphone header |
 
 They run sequentially (`--test-concurrency=1`); each spawns a server, so a
 parallel run just fights itself for CPU.
@@ -721,6 +801,9 @@ src/store/             Zustand stores (cart, auth, catalogue cache, theme)
 src/lib/billMath.ts    Bill arithmetic + FIFO allocation, shared by server and till
 src/lib/cartActions.ts Adding to the bill: reads batches, refuses missing stock
 src/lib/fullscreen.ts  Fullscreen API shim (prefixes, preference storage)
+src/lib/voiceQuery.ts  Search by voice: what was heard → what goes in the search box
+src/lib/speech/        Search by voice: the browser's and the Android app's recognisers
+src/components/VoiceSearchButton.tsx  The microphone in a search box (F2)
 src/components/StockPanel.tsx  An item's batches, repricing, stock adjustments
 src/components/Receipt.tsx   Thermal (80mm) and A4 tax invoice layouts
 tests/                 End-to-end suite

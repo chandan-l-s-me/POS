@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Bluetooth, Check, ChevronDown, Delete, LogOut, MessageCircle, Minus, Plus, Printer, RotateCcw, Search, Settings2, Trash2, X,
+  Bluetooth, Check, ChevronDown, Delete, LogOut, MessageCircle, Mic, Minus, Plus, Printer, RotateCcw, Search, Settings2, Trash2, X,
 } from 'lucide-react';
 import { api, type ApiError } from '../api';
 import type { CartItem, Customer, Item } from '../types';
@@ -28,8 +28,9 @@ import { LanguageSwitch } from '../components/LanguageSwitch';
 import { itemKannada, itemLabel, localName, paymentLabel, t, tn, unitLabel } from '../i18n';
 import { ItemName, LocalName } from '../components/ItemName';
 import { BulkNote } from '../components/BulkPrices';
-import { searchList } from '../lib/fuzzy';
+import { searchList, type SearchFields } from '../lib/fuzzy';
 import { CUSTOMER_SEARCH, ITEM_SEARCH } from '../lib/searchFields';
+import { hasVoiceSearch, VoiceSearchButton } from '../components/VoiceSearchButton';
 
 /**
  * Quick Bill: billing on a phone, for cashiers walking the shop floor.
@@ -73,6 +74,12 @@ export const QuickBill = () => {
   const roundOff = round2(total - (grossTotal - discount));
 
   const [sheet, setSheet] = useState<Sheet>(null);
+  // The item sheet was opened by the microphone, so it starts listening.
+  const [searchByVoice, setSearchByVoice] = useState(false);
+  const openSearch = (byVoice: boolean) => {
+    setSearchByVoice(byVoice);
+    setSheet('search');
+  };
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [usual, setUsual] = useState<QuickItem[]>([]);
   const [popular, setPopular] = useState<QuickItem[]>([]);
@@ -408,9 +415,20 @@ export const QuickBill = () => {
       {/* Bill */}
       <main className="flex-1 overflow-y-auto overscroll-contain">
         <div className="px-4 pt-3">
-          <button onClick={() => setSheet('search')} className="flex w-full items-center gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-3.5 text-left text-gray-400 active:bg-gray-50">
-            <Search size={20} /> {t('Search items…')}
-          </button>
+          <div className="relative">
+            <button onClick={() => openSearch(false)} className={cn('flex w-full items-center gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-3.5 text-left text-gray-400 active:bg-gray-50', hasVoiceSearch() && 'pr-16')}>
+              <Search size={20} /> {t('Search items…')}
+            </button>
+            {hasVoiceSearch() && (
+              <button
+                onClick={() => openSearch(true)}
+                aria-label={t('Search by voice')}
+                className="absolute right-1.5 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-xl text-orange-600 active:bg-orange-50"
+              >
+                <Mic size={22} />
+              </button>
+            )}
+          </div>
         </div>
 
         {suggestions.length > 0 && (
@@ -590,6 +608,7 @@ export const QuickBill = () => {
           onStep={changeBy}
           onSet={(lineId, value) => { if (value <= 0) removeItem(lineId); else updateQuantity(lineId, value); vibrate(); }}
           onClose={() => setSheet(null)}
+          listening={searchByVoice}
         />
       )}
       {sheet && typeof sheet === 'object' && 'keypad' in sheet && (() => {
@@ -702,16 +721,34 @@ const SheetFrame = ({ title, onClose, children, tall }: { title: string; onClose
   );
 };
 
-const SearchBox = ({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) => (
+/**
+ * A sheet's search box, with a microphone where the phone can search by
+ * voice. Opened by the main screen's microphone (`listening`), it starts
+ * listening at once and keeps the keyboard down so the matches stay in view.
+ */
+const SearchBox = <T,>({ value, onChange, placeholder, list, fields, listening = false }: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  list: readonly T[];
+  fields: SearchFields<NoInfer<T>>;
+  listening?: boolean;
+}) => (
   <div className="relative px-4 pt-3">
     <Search size={20} className="absolute left-8 top-1/2 mt-1.5 -translate-y-1/2 text-gray-400" />
-    <input
-      autoFocus
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      placeholder={placeholder}
-      className="h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 pl-11 pr-4 text-base outline-none focus:ring-2 focus:ring-orange-500"
-    />
+    <div className="relative">
+      <input
+        autoFocus={!listening}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className={cn(
+          'h-12 w-full rounded-2xl border border-gray-200 bg-gray-50 pl-11 pr-4 text-base outline-none focus:ring-2 focus:ring-orange-500',
+          hasVoiceSearch() && 'pr-14'
+        )}
+      />
+      <VoiceSearchButton value={value} onChange={onChange} list={list} fields={fields} size="lg" keepFocus={false} autoStart={listening} />
+    </div>
   </div>
 );
 
@@ -729,7 +766,7 @@ const CustomerSheet = ({ customers, selectedId, onPick, onClose }: {
 
   return (
     <SheetFrame title={t('Customer')} onClose={onClose} tall>
-      <SearchBox value={query} onChange={setQuery} placeholder={t('Bakery, name or phone')} />
+      <SearchBox value={query} onChange={setQuery} placeholder={t('Bakery, name or phone')} list={customers} fields={CUSTOMER_SEARCH} />
       <ul className="mt-2 flex-1 overflow-y-auto px-2">
         <li>
           <button onClick={() => onPick(null)} className={cn('w-full rounded-xl px-3 py-3 text-left active:bg-gray-100', selectedId === null && 'bg-orange-50')}>
@@ -753,9 +790,11 @@ const CustomerSheet = ({ customers, selectedId, onPick, onClose }: {
   );
 };
 
-const SearchSheet = ({ catalogue, complete, lines, onAdd, onStep, onSet, onClose }: {
+const SearchSheet = ({ catalogue, complete, lines, onAdd, onStep, onSet, onClose, listening }: {
   catalogue: Item[];
   complete: boolean;
+  /** Opened by the microphone: listen straight away. */
+  listening?: boolean;
   /** The bill's lines, so each item shows the quantity already in it. */
   lines: CartItem[];
   onAdd: (item: Item, quantity?: number) => Promise<void>;
@@ -792,7 +831,7 @@ const SearchSheet = ({ catalogue, complete, lines, onAdd, onStep, onSet, onClose
 
   return (
     <SheetFrame title={t('Add items')} onClose={onClose} tall>
-      <SearchBox value={query} onChange={setQuery} placeholder={t('Type part of the item name')} />
+      <SearchBox value={query} onChange={setQuery} placeholder={t('Type part of the item name')} list={catalogue} fields={ITEM_SEARCH} listening={listening} />
       <p className="px-4 pt-2 text-xs text-gray-400">{t('Tap + to add one, or tap an item to type the quantity.')}</p>
       <ul className="mt-1 flex-1 overflow-y-auto px-2">
         {matches.length === 0 && <li className="py-10 text-center text-sm text-gray-400">{t('No item matches “{query}”.', { query })}</li>}

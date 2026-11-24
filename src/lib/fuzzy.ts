@@ -107,23 +107,42 @@ const scoreEntry = <U>(entry: U, query: string, typedWords: string[], fields: Se
   return slips === 0 ? 2 : 10 + slips;
 };
 
+export interface RankedEntry<T> {
+  entry: T;
+  /** Lower is better: under 10 contains every typed word, 10 and up a close match. */
+  score: number;
+}
+
+/**
+ * searchList with each entry's score, for callers that compare one query with
+ * another (voice search weighs what the recogniser might have heard). With
+ * `allowSlips` false only entries containing what was typed are returned.
+ */
+export const rankList = <T>(
+  list: readonly T[],
+  query: string,
+  fields: SearchFields<NoInfer<T>>,
+  allowSlips = true
+): Array<RankedEntry<T>> => {
+  const folded = foldText(query);
+  if (!folded) return list.map((entry) => ({ entry, score: 0 }));
+  const typedWords = folded.split(' ');
+
+  const rank = (slips: boolean) =>
+    list
+      .map((entry, index) => ({ entry, index, score: scoreEntry(entry, folded, typedWords, fields, slips) }))
+      .filter((hit): hit is { entry: T; index: number; score: number } => hit.score != null)
+      .sort((a, b) => a.score - b.score || a.index - b.index)
+      .map(({ entry, score }) => ({ entry, score }));
+
+  const direct = rank(false);
+  return direct.length || !allowSlips ? direct : rank(true);
+};
+
 /**
  * The entries matching what was typed, best first; ties keep the list's own
  * order. Close matches are offered only when nothing contains what was typed.
  */
 // NoInfer: the entries decide T; shared fields for a wider type (ITEM_SEARCH) still fit.
-export const searchList = <T>(list: readonly T[], query: string, fields: SearchFields<NoInfer<T>>): T[] => {
-  const folded = foldText(query);
-  if (!folded) return list.slice();
-  const typedWords = folded.split(' ');
-
-  const rank = (allowSlips: boolean) =>
-    list
-      .map((entry, index) => ({ entry, index, score: scoreEntry(entry, folded, typedWords, fields, allowSlips) }))
-      .filter((hit): hit is { entry: T; index: number; score: number } => hit.score != null)
-      .sort((a, b) => a.score - b.score || a.index - b.index)
-      .map((hit) => hit.entry);
-
-  const direct = rank(false);
-  return direct.length ? direct : rank(true);
-};
+export const searchList = <T>(list: readonly T[], query: string, fields: SearchFields<NoInfer<T>>): T[] =>
+  rankList(list, query, fields).map((hit) => hit.entry);

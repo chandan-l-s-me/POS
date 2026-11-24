@@ -115,7 +115,9 @@ app.use((_req, res, next) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
+  // The microphone for search by voice, on the app's own pages only; nothing
+  // else may ask for it, and nothing may ask for the camera or location.
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(self), camera=(), payment=()');
   // Never let a browser or proxy cache an API response containing sales data.
   if (_req.path.startsWith('/api/')) {
     res.setHeader('Cache-Control', 'no-store');

@@ -29,3 +29,14 @@ export const CUSTOMER_SEARCH: SearchFields<SearchableCustomer> = {
   names: (customer) => [customer.shop_name, customer.name, kannadaOf(customer.shop_name), kannadaOf(customer.name)],
   codes: (customer) => [customer.phone, customer.gstin],
 };
+
+interface SearchableSupplier {
+  name: string;
+  phone?: string | null;
+  gstin?: string | null;
+}
+
+export const SUPPLIER_SEARCH: SearchFields<SearchableSupplier> = {
+  names: (supplier) => [supplier.name],
+  codes: (supplier) => [supplier.phone, supplier.gstin],
+};

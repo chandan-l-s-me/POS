@@ -19,7 +19,8 @@ import { PAYMENT_METHOD_OPTIONS, supplierLabel } from '../lib/supplierPayments';
 import { itemLabel, t, unitLabel } from '../i18n';
 import { ItemName } from '../components/ItemName';
 import { searchList } from '../lib/fuzzy';
-import { ITEM_SEARCH } from '../lib/searchFields';
+import { ITEM_SEARCH, SUPPLIER_SEARCH } from '../lib/searchFields';
+import { hasVoiceSearch, VoiceSearchButton } from '../components/VoiceSearchButton';
 
 /**
  * How this purchase is being paid. On credit by default: forgetting to mark a
@@ -314,6 +315,13 @@ export const Purchases = () => {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  /** Text in the supplier box, typed or spoken: it is also the supplier's name if none is picked. */
+  const searchSuppliers = (value: string) => {
+    setSupplierQuery(value);
+    setShowSupplierSuggestions(true);
+    setForm((current) => ({ ...current, supplier_name: value }));
+  };
 
   const supplierSuggestions = useMemo(() => {
     const query = normalizeSupplierKey(supplierQuery || form.supplier_name);
@@ -762,12 +770,7 @@ export const Purchases = () => {
                   data-purchase-nav="true"
                   type="text"
                   value={supplierQuery}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setSupplierQuery(value);
-                    setShowSupplierSuggestions(true);
-                    setForm((current) => ({ ...current, supplier_name: value }));
-                  }}
+                  onChange={(e) => searchSuppliers(e.target.value)}
                   onFocus={() => setShowSupplierSuggestions(true)}
                   onBlur={() => window.setTimeout(() => setShowSupplierSuggestions(false), 150)}
                   onKeyDown={(e) => {
@@ -786,8 +789,12 @@ export const Purchases = () => {
                     }
                   }}
                   placeholder={t('Type supplier name, or leave empty')}
-                  className="w-full pl-11 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none"
+                  className={cn(
+                    'w-full pl-11 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-orange-500 outline-none',
+                    hasVoiceSearch() && 'pr-12'
+                  )}
                 />
+                <VoiceSearchButton value={supplierQuery} onChange={searchSuppliers} list={suppliers} fields={SUPPLIER_SEARCH} />
               </div>
 
               {showSupplierSuggestions && supplierSuggestions.length > 0 && (
@@ -972,6 +979,16 @@ export const Purchases = () => {
                     const typedBarcode = normalizeBarcode(row.barcode);
                     const barcodeIssue = typedBarcode ? barcodeProblem(typedBarcode) : null;
                     const takenBy = barcodeOwner(row);
+                    /** Text in this row's item box, typed or spoken: a new search, so no item is chosen yet. */
+                    const searchItemRow = (value: string) => {
+                      upsertRow(rowIndex, {
+                        item_query: value,
+                        item_id: 0,
+                        // The barcode came with the item being replaced.
+                        ...(selected?.barcode && normalizeBarcode(row.barcode) === selected.barcode ? { barcode: '' } : {}),
+                      });
+                      setActiveItemRow(rowIndex);
+                    };
                     const showItemMenu =
                       activeItemRow === rowIndex && itemMenuStyle && (itemSuggestions.length > 0 || row.item_query.trim() !== '');
 
@@ -1027,6 +1044,7 @@ export const Purchases = () => {
                           )}
                         </td>
                         <td className="px-2 py-2.5">
+                          <div className="relative">
                           <input
                             aria-label={t('Item')}
                             data-barcode-input
@@ -1039,15 +1057,7 @@ export const Purchases = () => {
                             value={row.item_query}
                             onFocus={() => setActiveItemRow(rowIndex)}
                             onBlur={() => window.setTimeout(() => setActiveItemRow((current) => (current === rowIndex ? null : current)), 150)}
-                            onChange={(e) => {
-                              upsertRow(rowIndex, {
-                                item_query: e.target.value,
-                                item_id: 0,
-                                // The barcode came with the item being replaced.
-                                ...(selected?.barcode && normalizeBarcode(row.barcode) === selected.barcode ? { barcode: '' } : {}),
-                              });
-                              setActiveItemRow(rowIndex);
-                            }}
+                            onChange={(e) => searchItemRow(e.target.value)}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
                                 e.preventDefault();
@@ -1079,8 +1089,18 @@ export const Purchases = () => {
                             }}
                             placeholder={t('Search or add item')}
                             title={row.item_query}
-                            className={ROW_FIELD}
+                            className={cn(ROW_FIELD, hasVoiceSearch() && 'pr-9')}
                           />
+                          <VoiceSearchButton
+                            value={row.item_query}
+                            onChange={searchItemRow}
+                            list={items}
+                            fields={ITEM_SEARCH}
+                            size="sm"
+                            // F2 with no row's box in use: the last row, where the next item goes.
+                            shortcut={rowIndex === computedRows.length - 1}
+                          />
+                          </div>
                           {isNew && (
                             <p className="mt-1 truncate text-[11px] font-semibold text-orange-600" title={t('Added to the catalogue when this purchase is saved')}>
                               {t('New item')}

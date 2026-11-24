@@ -41,6 +41,7 @@ import { lookupBarcode } from '../lib/barcodeLookup';
 import { billTabName, itemLabel, localName, paymentLabel, t, unitLabel, useItemNamesStore } from '../i18n';
 import { ItemName, LocalName } from '../components/ItemName';
 import { BulkNote } from '../components/BulkPrices';
+import { hasVoiceSearch, VoiceSearchButton } from '../components/VoiceSearchButton';
 
 const normalizeCustomerKey = (value: string) => value.trim().toLowerCase();
 
@@ -293,6 +294,21 @@ export const Billing = () => {
     if (!editingCartId) return;
     setCartName(editingCartId, cartNameInput);
     setEditingCartId(null);
+  };
+
+  /** Text in the item search, typed or spoken: its matches open under the box. */
+  const searchItems = (value: string) => {
+    setSearch(value);
+    setShowItemMenu(true);
+  };
+
+  /** Text in the customer box, typed or spoken. Changing it lets go of the customer it named. */
+  const searchCustomers = (value: string) => {
+    setCustomerQuery(value);
+    setShowCustomerSuggestions(true);
+    if (!customer || normalizeCustomerKey(value) !== normalizeCustomerKey(customerDisplayName(customer))) {
+      setCustomer(null);
+    }
   };
 
   const selectCustomer = (nextCustomer: Customer) => {
@@ -671,14 +687,7 @@ export const Billing = () => {
                   <input
                     type="text"
                     value={customerQuery}
-                    onChange={(e) => {
-                      const nextValue = e.target.value;
-                      setCustomerQuery(nextValue);
-                      setShowCustomerSuggestions(true);
-                      if (!customer || normalizeCustomerKey(nextValue) !== normalizeCustomerKey(customerDisplayName(customer))) {
-                        setCustomer(null);
-                      }
-                    }}
+                    onChange={(e) => searchCustomers(e.target.value)}
                     onFocus={() => setShowCustomerSuggestions(true)}
                     onBlur={() => window.setTimeout(() => setShowCustomerSuggestions(false), 150)}
                     onKeyDown={(e) => {
@@ -708,8 +717,9 @@ export const Billing = () => {
                       }
                     }}
                     placeholder={t('Bakery / shop, or customer name')}
-                    className={cn(FORM_FIELD, 'pl-12')}
+                    className={cn(FORM_FIELD, 'pl-12', hasVoiceSearch() && 'pr-12')}
                   />
+                  <VoiceSearchButton value={customerQuery} onChange={searchCustomers} list={customers} fields={CUSTOMER_SEARCH} />
                 </div>
 
                 {showCustomerSuggestions && customerSuggestions.length > 0 && (
@@ -997,14 +1007,12 @@ export const Billing = () => {
                       Purchases. Matches float over the page under the box. */}
                   <tr className="align-top bg-orange-50/30">
                     <td className="pl-4 pr-2 py-2.5">
+                      <div className="relative">
                       <input
                         ref={searchInputRef}
                         type="text"
                         value={search}
-                        onChange={(e) => {
-                          setSearch(e.target.value);
-                          setShowItemMenu(true);
-                        }}
+                        onChange={(e) => searchItems(e.target.value)}
                         onFocus={() => setShowItemMenu(true)}
                         onBlur={() => window.setTimeout(() => setShowItemMenu(false), 150)}
                         onKeyDown={(e) => {
@@ -1044,8 +1052,10 @@ export const Billing = () => {
                         aria-label={t('Item search')}
                         data-barcode-input
                         title={search}
-                        className={ROW_FIELD}
+                        className={cn(ROW_FIELD, hasVoiceSearch() && 'pr-9')}
                       />
+                      <VoiceSearchButton value={search} onChange={searchItems} list={items} fields={ITEM_SEARCH} size="sm" shortcut />
+                      </div>
 
                       {itemMenuStyle &&
                         createPortal(

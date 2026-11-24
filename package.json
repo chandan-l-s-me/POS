@@ -1,7 +1,7 @@
 {
   "name": "vyapara-billing",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.3.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -13,6 +13,7 @@
     "test": "npm run build && tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:only": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "seed:demo": "tsx scripts/seed-demo.ts",
+    "seed:test": "tsx scripts/seed-test-data.ts",
     "android:build": "npx cap sync android && cd android && ./gradlew assembleRelease --no-daemon --project-cache-dir .gradle.nosync --max-workers=2",
     "package": "node scripts/package.mjs"
   },

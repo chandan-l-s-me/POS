@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { setFieldValue } from '../lib/fieldValue';
 
 /**
  * Hardware barcode scanner capture, for the page that mounts it.
@@ -41,12 +42,7 @@ const fieldValue = (target: EventTarget | null) =>
  * number when it gets the cursor).
  */
 const restoreField = (target: EventTarget | null, before: string | null) => {
-  if (before == null || !(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
-  if (target.value === before) return;
-  const proto = target instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-  // Through the native setter and an input event, so React's state follows.
-  Object.getOwnPropertyDescriptor(proto, 'value')?.set?.call(target, before);
-  target.dispatchEvent(new Event('input', { bubbles: true }));
+  if (before != null) setFieldValue(target, before);
 };
 
 export const useBarcodeScanner = (onScan: (code: string) => void, enabled = true) => {
